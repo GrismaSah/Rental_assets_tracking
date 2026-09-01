@@ -40,10 +40,51 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Re-run the rules engine, auto-dispatching Email + SMS + in-cab console
+  // notifications the instant a *new* alert appears (mirrors how a real
+  // telematics platform like VisionLink pushes alerts automatically rather
+  // than waiting for someone to click a button). Alerts that already existed
+  // keep their prior resolved/notification state instead of being recomputed
+  // from scratch, so acknowledging or notifying an alert isn't undone the
+  // next time assets change.
+  const refreshAlerts = () => {
+    const detectedAlerts = runAnomalyDetection(assets);
+
+    setAlerts((prevAlerts) => {
+      const prevById = new Map<string, AnomalyAlert>(prevAlerts.map((a) => [a.id, a]));
+      let newlyNotifiedCount = 0;
+
+      const merged = detectedAlerts.map((alert) => {
+        const prev = prevById.get(alert.id);
+        if (prev) {
+          return { ...alert, resolved: prev.resolved, notifications: prev.notifications, notified_at: prev.notified_at };
+        }
+
+        const asset = assets.find((a) => a.id === alert.asset_id);
+        const site = sites.find((s) => s.id === asset?.site_id);
+        const operator = operators.find((o) => o.id === asset?.operator_id);
+        const dispatches = dispatchNotification(alert, asset, site, operator);
+        newlyNotifiedCount += 1;
+
+        return { ...alert, notifications: dispatches, notified_at: new Date().toISOString() };
+      });
+
+      if (newlyNotifiedCount > 0) {
+        setTimeout(() => {
+          showToast(
+            'Auto-Notification Dispatched',
+            `${newlyNotifiedCount} new alert(s) auto-notified via Email, SMS & in-cab console alert.`
+          );
+        }, 0);
+      }
+
+      return merged;
+    });
+  };
+
   // Run anomaly detection whenever assets change
   useEffect(() => {
-    const detectedAlerts = runAnomalyDetection(assets);
-    setAlerts(detectedAlerts);
+    refreshAlerts();
   }, [assets]);
 
   // Load initial backend assets if running fullstack
@@ -254,8 +295,7 @@ export default function App() {
           setIsInspectionOpen(true);
         }}
         onRefresh={() => {
-          const freshAlerts = runAnomalyDetection(assets);
-          setAlerts(freshAlerts);
+          refreshAlerts();
           showToast('Telemetry Synced', 'Refreshed live Caterpillar telematic sensor streams.');
         }}
       />
