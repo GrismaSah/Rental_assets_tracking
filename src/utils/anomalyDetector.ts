@@ -20,7 +20,25 @@ export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
       });
     }
 
-    // Rule 2: Unassigned Operator while machine is on rental / checked out
+    // Rule 2: Unassigned Equipment — sitting with no job site assignment at all.
+    // Distinct from "Unassigned Operator" below: this flags a machine that
+    // isn't even deployed anywhere, so nobody has eyes on it and it isn't
+    // earning its rental cost.
+    if (!asset.site_id) {
+      alerts.push({
+        id: `ANOM-SITE-${asset.id}`,
+        asset_id: asset.id,
+        type: 'Unassigned Equipment',
+        severity: 'Warning',
+        description: `Asset ${asset.id} (${asset.model}) has no job site assignment — it is sitting unassigned instead of deployed to active work.`,
+        metric_value: `Site: Unassigned`,
+        recommendation: `Assign this unit to an active job site or schedule its return to the dealer to stop unnecessary rental accrual.`,
+        timestamp: 'Real-Time Rule Trigger',
+        resolved: false,
+      });
+    }
+
+    // Rule 3: Unassigned Operator while machine is on rental / checked out
     if (!asset.operator_id && asset.status !== 'Under Maintenance') {
       alerts.push({
         id: `ANOM-OP-${asset.id}`,
@@ -35,7 +53,7 @@ export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
       });
     }
 
-    // Rule 3: Approaching / Overdue return date.
+    // Rule 4: Approaching / Overdue return date.
     // Per Cat Rental Store terms, the rental term only ends once the unit is
     // actually returned to the dealer, and overdue units continue to accrue
     // daily rental (demurrage) charges — so this only applies to units still
@@ -73,7 +91,7 @@ export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
       }
     }
 
-    // Rule 4: Low Health Score / Imminent Service
+    // Rule 5: Low Health Score / Imminent Service
     if (asset.health_score < 70 || asset.status === 'Under Maintenance' || asset.next_maintenance_hours <= 0) {
       alerts.push({
         id: `ANOM-MAINT-${asset.id}`,

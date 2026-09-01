@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Clock,
   UserX,
+  MapPinOff,
   CalendarX,
   Wrench,
   CheckCircle2,
@@ -113,6 +114,7 @@ export const AnomalyAlertsPanel: React.FC<AnomalyAlertsPanelProps> = ({
           let TypeIcon = AlertTriangle;
           if (alert.type === 'High Idle') TypeIcon = Clock;
           if (alert.type === 'Unassigned Operator') TypeIcon = UserX;
+          if (alert.type === 'Unassigned Equipment') TypeIcon = MapPinOff;
           if (alert.type === 'Overdue Rental' || alert.type === 'Approaching Return') TypeIcon = CalendarX;
           if (alert.type === 'Low Health / Maintenance') TypeIcon = Wrench;
 

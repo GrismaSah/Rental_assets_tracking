@@ -76,7 +76,7 @@ export interface InspectionRecord {
 export interface AnomalyAlert {
   id: string;
   asset_id: string;
-  type: 'High Idle' | 'Unassigned Operator' | 'Approaching Return' | 'Overdue Rental' | 'Low Health / Maintenance' | 'Excess Fuel Burn';
+  type: 'High Idle' | 'Unassigned Operator' | 'Unassigned Equipment' | 'Approaching Return' | 'Overdue Rental' | 'Low Health / Maintenance' | 'Excess Fuel Burn';
   severity: 'Critical' | 'Warning' | 'Info';
   description: string;
   metric_value: string;
