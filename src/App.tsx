@@ -258,6 +258,7 @@ export default function App() {
         {activeTab === 'analytics' && (
           <TelemetryAnalytics
             assets={assets}
+            sites={sites}
             onFocusAsset={(asset) => {
               setSelectedAsset(asset);
               setActiveTab('map');

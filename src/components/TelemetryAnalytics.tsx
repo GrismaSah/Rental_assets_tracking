@@ -24,7 +24,7 @@ import {
   Layers,
   ArrowUpRight
 } from 'lucide-react';
-import { Asset } from '../types';
+import { Asset, Site } from '../types';
 
 ChartJS.register(
   CategoryScale,
@@ -41,11 +41,13 @@ ChartJS.register(
 
 interface TelemetryAnalyticsProps {
   assets: Asset[];
+  sites: Site[];
   onFocusAsset: (asset: Asset) => void;
 }
 
 export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
   assets,
+  sites,
   onFocusAsset,
 }) => {
   const [timeRange, setTimeRange] = useState<'7d' | '30d'>('7d');
@@ -62,6 +64,38 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
 
   // Carbon Waste: 2.68 kg CO2 per liter of diesel burned at idle (~3.5 L/hr at idle)
   const dailyIdleCO2Kg = Math.round(totalIdleHoursDay * 3.5 * 2.68);
+
+  // Usage & Downtime Summary Per Site: cumulative rented hours over the life of each
+  // check-out (engine/idle rate x operating_days), grouped by site_id, with a
+  // separate downtime tally for units sidelined under maintenance at that site.
+  const siteUsageSummary = sites
+    .map((site) => {
+      const siteAssets = assets.filter((a) => a.site_id === site.id);
+      if (siteAssets.length === 0) return null;
+
+      const totalRentalDays = siteAssets.reduce((acc, a) => acc + a.operating_days, 0);
+      const totalEngineHours = siteAssets.reduce((acc, a) => acc + a.engine_hours_day * a.operating_days, 0);
+      const totalIdleHours = siteAssets.reduce((acc, a) => acc + a.idle_hours_day * a.operating_days, 0);
+      const totalHours = totalEngineHours + totalIdleHours;
+      const idlePct = totalHours > 0 ? Math.round((totalIdleHours / totalHours) * 100) : 0;
+
+      const downtimeAssets = siteAssets.filter((a) => a.status === 'Under Maintenance');
+      const downtimeDays = downtimeAssets.reduce((acc, a) => acc + a.operating_days, 0);
+
+      return {
+        siteId: site.id,
+        siteName: site.name,
+        machineCount: siteAssets.length,
+        totalRentalDays,
+        totalEngineHours: Math.round(totalEngineHours),
+        totalIdleHours: Math.round(totalIdleHours),
+        idlePct,
+        downtimeUnits: downtimeAssets.length,
+        downtimeDays,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null)
+    .sort((a, b) => b.totalIdleHours - a.totalIdleHours);
 
   // 1. Line Chart Data: 7-Day Fuel Burn Trend (Liters / Hour)
   const daysLabels = timeRange === '7d' 
@@ -454,6 +488,67 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
           </div>
         </div>
 
+      </div>
+
+      {/* Usage & Downtime Summary Per Site */}
+      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 rounded-lg bg-neutral-100 text-neutral-600">
+            <Layers className="w-3.5 h-3.5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-neutral-900">
+              Usage & Downtime Summary by Site
+            </h3>
+            <p className="text-xs text-neutral-500">
+              Cumulative rented hours and maintenance downtime, rolled up per job site
+            </p>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-neutral-100 text-neutral-400 font-medium">
+                <th className="pb-2 pl-1">Site</th>
+                <th className="pb-2 text-right">Machines</th>
+                <th className="pb-2 text-right">Total Rental Days</th>
+                <th className="pb-2 text-right">Engine Hours</th>
+                <th className="pb-2 text-right">Idle Hours</th>
+                <th className="pb-2 text-right">Idle %</th>
+                <th className="pb-2 text-right pr-1">Downtime</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-100">
+              {siteUsageSummary.map((row) => (
+                <tr key={row.siteId} className="hover:bg-neutral-50/80 transition-colors">
+                  <td className="py-2.5 pl-1">
+                    <div className="font-semibold text-neutral-900">{row.siteName}</div>
+                    <div className="text-[11px] text-neutral-400 font-mono">{row.siteId}</div>
+                  </td>
+                  <td className="py-2.5 text-right text-neutral-700">{row.machineCount}</td>
+                  <td className="py-2.5 text-right text-neutral-700">{row.totalRentalDays}d</td>
+                  <td className="py-2.5 text-right font-semibold text-emerald-700">{row.totalEngineHours}h</td>
+                  <td className="py-2.5 text-right font-semibold text-amber-600">{row.totalIdleHours}h</td>
+                  <td className="py-2.5 text-right">
+                    <span className={row.idlePct > 50 ? 'text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded-md font-bold' : 'text-neutral-700 font-semibold'}>
+                      {row.idlePct}%
+                    </span>
+                  </td>
+                  <td className="py-2.5 text-right pr-1">
+                    {row.downtimeUnits > 0 ? (
+                      <span className="text-rose-600 font-semibold">
+                        {row.downtimeUnits} unit{row.downtimeUnits > 1 ? 's' : ''} · {row.downtimeDays}d
+                      </span>
+                    ) : (
+                      <span className="text-neutral-400">None</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
