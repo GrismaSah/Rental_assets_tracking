@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { DatabaseSync } from 'node:sqlite';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './src/data/initialAssets.ts';
 
 dotenv.config();
@@ -16,9 +17,62 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// In-memory fleet state initialized from dataset
-let fleetAssets = [...INITIAL_ASSETS];
-let inspectionLogs: any[] = [];
+// -------------------------------------------------------------
+// PERSISTENCE (SQLite via Node's built-in node:sqlite module)
+// -------------------------------------------------------------
+// Fleet state used to live only in a plain JS array, which meant every
+// check-in/check-out/inspection was lost on a server restart. SQLite gives
+// real persistence with zero extra dependencies (no native build step,
+// unlike better-sqlite3) since it ships inside the Node runtime itself.
+const db = new DatabaseSync(path.join(__dirname, 'fleet.db'));
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS assets (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS inspections (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+`);
+
+const upsertAssetStmt = db.prepare(
+  'INSERT INTO assets (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data'
+);
+const insertInspectionStmt = db.prepare(
+  'INSERT INTO inspections (id, data, created_at) VALUES (?, ?, ?)'
+);
+
+function persistAsset(asset: any) {
+  upsertAssetStmt.run(asset.id, JSON.stringify(asset));
+}
+
+function persistInspection(inspection: any) {
+  insertInspectionStmt.run(inspection.id, JSON.stringify(inspection), inspection.timestamp);
+}
+
+function loadOrSeedAssets(): any[] {
+  const rows = db.prepare('SELECT data FROM assets').all() as { data: string }[];
+  if (rows.length === 0) {
+    // First boot: seed the database from the bundled sample dataset.
+    for (const asset of INITIAL_ASSETS) persistAsset(asset);
+    return [...INITIAL_ASSETS];
+  }
+  // Restore whatever was actually saved (post check-in/out, inspections, etc)
+  const byId = new Map(rows.map((r) => [JSON.parse(r.data).id, JSON.parse(r.data)]));
+  return INITIAL_ASSETS.map((seed) => byId.get(seed.id) || seed);
+}
+
+function loadInspections(): any[] {
+  const rows = db.prepare('SELECT data FROM inspections ORDER BY created_at DESC').all() as { data: string }[];
+  return rows.map((r) => JSON.parse(r.data));
+}
+
+// Fleet state, now backed by SQLite -- survives a server restart.
+let fleetAssets = loadOrSeedAssets();
+let inspectionLogs: any[] = loadInspections();
 
 // Gemini client initialization
 function getGeminiClient(): GoogleGenAI | null {
@@ -85,6 +139,7 @@ app.post('/api/checkout', (req, res) => {
     location: site ? site.location : fleetAssets[index].location,
     anomalies: [],
   };
+  persistAsset(fleetAssets[index]);
 
   res.json({
     success: true,
@@ -110,6 +165,7 @@ app.post('/api/checkin', (req, res) => {
     fuel_level_pct: fuel_level_pct !== undefined ? fuel_level_pct : fleetAssets[index].fuel_level_pct,
     anomalies: [],
   };
+  persistAsset(fleetAssets[index]);
 
   res.json({
     success: true,
@@ -127,6 +183,7 @@ app.post('/api/inspections', (req, res) => {
   };
 
   inspectionLogs.unshift(inspectionData);
+  persistInspection(inspectionData);
 
   // If failed risk score, update asset health / status
   if (req.body.asset_id && req.body.risk_score > 60) {
@@ -134,6 +191,7 @@ app.post('/api/inspections', (req, res) => {
     if (assetIdx !== -1) {
       fleetAssets[assetIdx].status = 'Under Maintenance';
       fleetAssets[assetIdx].health_score = Math.max(30, 100 - req.body.risk_score);
+      persistAsset(fleetAssets[assetIdx]);
     }
   }
 
