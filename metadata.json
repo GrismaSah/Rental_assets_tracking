@@ -1,0 +1,6 @@
+{
+  "name": "Caterpillar Fleet Smart Asset Rental Tracking",
+  "description": "Executive Caterpillar heavy machinery tracking, automated check-in/out, live telemetry analytics, anomaly detection, and AI demand forecasting.",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
