@@ -512,7 +512,11 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="text-right hidden sm:block">
+                        <div className="text-[9px] uppercase tracking-wider text-neutral-400 font-semibold">Due Back</div>
+                        <div className="text-[11px] font-mono font-semibold text-neutral-700">{asset.checkin_date}</div>
+                      </div>
                       <span
                         className={`w-2 h-2 rounded-full ${
                           asset.status === 'Active'
