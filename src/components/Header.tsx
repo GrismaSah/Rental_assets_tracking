@@ -20,7 +20,6 @@ interface HeaderProps {
   assets: Asset[];
   alerts: AnomalyAlert[];
   onOpenCheckInOut: (type: 'checkout' | 'checkin') => void;
-  onOpenQrScanner: () => void;
   onOpenInspection: () => void;
   onRefresh: () => void;
 }
@@ -31,7 +30,6 @@ export const Header: React.FC<HeaderProps> = ({
   assets,
   alerts,
   onOpenCheckInOut,
-  onOpenQrScanner,
   onOpenInspection,
   onRefresh,
 }) => {
@@ -97,11 +95,11 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center gap-2">
           <button
             id="quick-rfid-scan-btn"
-            onClick={onOpenQrScanner}
+            onClick={() => onOpenCheckInOut('checkout')}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#FFCD00] text-neutral-950 hover:bg-[#F5C400] transition-colors shadow-2xs cursor-pointer active:scale-98"
           >
             <ScanLine className="w-4 h-4" />
-            <span>Scan QR Tag</span>
+            <span>Check-In / Out</span>
           </button>
 
           <button

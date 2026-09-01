@@ -7,7 +7,6 @@ import { InspectionModal } from './components/InspectionModal';
 import { AiDemandForecaster } from './components/AiDemandForecaster';
 import { AnomalyAlertsPanel } from './components/AnomalyAlertsPanel';
 import { AlertHistoryPanel } from './components/AlertHistoryPanel';
-import { QrScannerModal } from './components/QrScannerModal';
 import { QrCodeModal } from './components/QrCodeModal';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
 import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem } from './types';
@@ -43,7 +42,6 @@ export default function App() {
   // scan or manual entry -- tagged onto the API call so the rental_events
   // history table records how each event actually happened.
   const [checkInOutSource, setCheckInOutSource] = useState<'manual' | 'qr'>('manual');
-  const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
   const [isQrCodeModalOpen, setIsQrCodeModalOpen] = useState<boolean>(false);
   const [qrCodeAsset, setQrCodeAsset] = useState<Asset | null>(null);
 
@@ -268,12 +266,11 @@ export default function App() {
     setIsInspectionOpen(true);
   };
 
-  // Handler: QR scanner decoded a known machine -- open the check-in/out
-  // form pre-filled for it, defaulting to whichever direction makes sense
-  // given its current status (Active units are coming back in, everything
-  // else is going out to a customer).
+  // Handler: a machine's QR tag was opened (via ?scan=<id> in the URL) --
+  // open the check-in/out form pre-filled for it, defaulting to whichever
+  // direction makes sense given its current status (Active units are coming
+  // back in, everything else is going out to a customer).
   const handleQrScanSuccess = (asset: Asset) => {
-    setIsQrScannerOpen(false);
     setCheckInOutSource('qr');
     setModalAsset(asset);
     setCheckInOutMode(asset.status === 'Active' ? 'checkin' : 'checkout');
@@ -286,6 +283,27 @@ export default function App() {
     setQrCodeAsset(asset);
     setIsQrCodeModalOpen(true);
   };
+
+  // Real-world QR entry point: a machine's tag encodes a URL back to this
+  // app (?scan=<id>) so ANY phone's default camera app can open it directly
+  // -- no in-app scanner needed, same pattern as Caterpillar's own "Cat QR
+  // Codes" on real machines. On load, if the app was opened this way, jump
+  // straight to the pre-filled check-in/out form and clean the URL up.
+  useEffect(() => {
+    const scanId = new URLSearchParams(window.location.search).get('scan');
+    if (!scanId) return;
+
+    const asset = assets.find((a) => a.id.toLowerCase() === scanId.toLowerCase());
+    if (asset) {
+      handleQrScanSuccess(asset);
+    } else {
+      showToast('Unrecognized QR Tag', `"${scanId}" doesn't match any known machine.`, 'warning');
+    }
+
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('scan');
+    window.history.replaceState({}, '', cleanUrl.toString());
+  }, []);
 
   // Helper: Resolve anomaly alert
   const handleResolveAlert = (alertId: string) => {
@@ -344,7 +362,6 @@ export default function App() {
           setCheckInOutMode(mode);
           setIsCheckInOutOpen(true);
         }}
-        onOpenQrScanner={() => setIsQrScannerOpen(true)}
         onOpenInspection={() => {
           setInspectionTargetAsset(assets[0]);
           setIsInspectionOpen(true);
@@ -621,21 +638,6 @@ export default function App() {
         asset={inspectionTargetAsset || assets[0]}
         operators={operators}
         onSubmitInspection={handleInspectionSubmit}
-      />
-
-      {/* QR Scanner -- real camera-based scan, decodes to a machine's stable QR tag */}
-      <QrScannerModal
-        isOpen={isQrScannerOpen}
-        onClose={() => setIsQrScannerOpen(false)}
-        assets={assets}
-        onScanSuccess={handleQrScanSuccess}
-        onUseManualEntry={() => {
-          setIsQrScannerOpen(false);
-          setCheckInOutSource('manual');
-          setModalAsset(null);
-          setCheckInOutMode('checkout');
-          setIsCheckInOutOpen(true);
-        }}
       />
 
       {/* QR Tag viewer -- the permanent, printable QR code for one machine */}
