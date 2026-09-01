@@ -6,8 +6,9 @@ import { CheckInOutModal } from './components/CheckInOutModal';
 import { InspectionModal } from './components/InspectionModal';
 import { AiDemandForecaster } from './components/AiDemandForecaster';
 import { AnomalyAlertsPanel } from './components/AnomalyAlertsPanel';
+import { AlertHistoryPanel } from './components/AlertHistoryPanel';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
-import { Asset, Site, Operator, AnomalyAlert, InspectionCheckItem } from './types';
+import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem } from './types';
 import { runAnomalyDetection } from './utils/anomalyDetector';
 import { dispatchNotification } from './utils/notificationDispatcher';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
@@ -17,9 +18,13 @@ export default function App() {
   const [sites, setSites] = useState<Site[]>(SITES);
   const [operators, setOperators] = useState<Operator[]>(OPERATORS);
   const [alerts, setAlerts] = useState<AnomalyAlert[]>([]);
+  // Permanent audit trail: every alert ever raised, including ones whose
+  // underlying condition has since cleared (asset returned, idle dropped,
+  // etc). `alerts` above only ever reflects what's true right now.
+  const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
 
   // Navigation tab state
-  const [activeTab, setActiveTab] = useState<'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies'>('map');
+  const [activeTab, setActiveTab] = useState<'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies' | 'history'>('map');
 
   // Selected asset state for drawer/map
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
@@ -46,40 +51,49 @@ export default function App() {
   // than waiting for someone to click a button). Alerts that already existed
   // keep their prior resolved/notification state instead of being recomputed
   // from scratch, so acknowledging or notifying an alert isn't undone the
-  // next time assets change.
+  // next time assets change. Every alert, past and present, is also logged
+  // into the permanent audit trail (alertHistory).
   const refreshAlerts = () => {
     const detectedAlerts = runAnomalyDetection(assets);
+    const prevById = new Map<string, AnomalyAlert>(alerts.map((a) => [a.id, a]));
+    const now = new Date().toISOString();
+    let newlyNotifiedCount = 0;
 
-    setAlerts((prevAlerts) => {
-      const prevById = new Map<string, AnomalyAlert>(prevAlerts.map((a) => [a.id, a]));
-      let newlyNotifiedCount = 0;
-
-      const merged = detectedAlerts.map((alert) => {
-        const prev = prevById.get(alert.id);
-        if (prev) {
-          return { ...alert, resolved: prev.resolved, notifications: prev.notifications, notified_at: prev.notified_at };
-        }
-
-        const asset = assets.find((a) => a.id === alert.asset_id);
-        const site = sites.find((s) => s.id === asset?.site_id);
-        const operator = operators.find((o) => o.id === asset?.operator_id);
-        const dispatches = dispatchNotification(alert, asset, site, operator);
-        newlyNotifiedCount += 1;
-
-        return { ...alert, notifications: dispatches, notified_at: new Date().toISOString() };
-      });
-
-      if (newlyNotifiedCount > 0) {
-        setTimeout(() => {
-          showToast(
-            'Auto-Notification Dispatched',
-            `${newlyNotifiedCount} new alert(s) auto-notified via Email, SMS & in-cab console alert.`
-          );
-        }, 0);
+    const merged = detectedAlerts.map((alert) => {
+      const prev = prevById.get(alert.id);
+      if (prev) {
+        return { ...alert, resolved: prev.resolved, notifications: prev.notifications, notified_at: prev.notified_at };
       }
 
-      return merged;
+      const asset = assets.find((a) => a.id === alert.asset_id);
+      const site = sites.find((s) => s.id === asset?.site_id);
+      const operator = operators.find((o) => o.id === asset?.operator_id);
+      const dispatches = dispatchNotification(alert, asset, site, operator);
+      newlyNotifiedCount += 1;
+
+      return { ...alert, notifications: dispatches, notified_at: now };
     });
+
+    setAlerts(merged);
+
+    if (newlyNotifiedCount > 0) {
+      showToast(
+        'Auto-Notification Dispatched',
+        `${newlyNotifiedCount} new alert(s) auto-notified via Email, SMS & in-cab console alert.`
+      );
+    }
+
+    const detectedIds = new Set(merged.map((a) => a.id));
+    const historyById = new Map<string, AlertHistoryEntry>(alertHistory.map((h) => [h.id, h]));
+
+    const clearedHistory = alertHistory.map((h) =>
+      !detectedIds.has(h.id) && !h.cleared_at ? { ...h, cleared_at: now } : h
+    );
+    const newHistoryEntries: AlertHistoryEntry[] = merged
+      .filter((a) => !historyById.has(a.id))
+      .map((a) => ({ ...a, first_seen_at: now }));
+
+    setAlertHistory([...newHistoryEntries, ...clearedHistory]);
   };
 
   // Run anomaly detection whenever assets change
@@ -244,6 +258,9 @@ export default function App() {
     setAlerts((prev) =>
       prev.map((a) => (a.id === alertId ? { ...a, resolved: true } : a))
     );
+    setAlertHistory((prev) =>
+      prev.map((h) => (h.id === alertId ? { ...h, resolved: true } : h))
+    );
     showToast('Alert Acknowledged', `Anomaly flag ${alertId} marked as reviewed.`);
   };
 
@@ -254,11 +271,13 @@ export default function App() {
     const operator = operators.find((o) => o.id === asset?.operator_id);
 
     const dispatches = dispatchNotification(alert, asset, site, operator);
+    const notifiedAt = new Date().toISOString();
 
     setAlerts((prev) =>
-      prev.map((a) =>
-        a.id === alert.id ? { ...a, notifications: dispatches, notified_at: new Date().toISOString() } : a
-      )
+      prev.map((a) => (a.id === alert.id ? { ...a, notifications: dispatches, notified_at: notifiedAt } : a))
+    );
+    setAlertHistory((prev) =>
+      prev.map((h) => (h.id === alert.id ? { ...h, notifications: dispatches, notified_at: notifiedAt } : h))
     );
 
     showToast(
@@ -536,6 +555,11 @@ export default function App() {
             onTakeAction={handleAnomalyAction}
             onNotify={handleNotifyAlert}
           />
+        )}
+
+        {/* Layer 2: Alert & Notification Audit Trail */}
+        {activeTab === 'history' && (
+          <AlertHistoryPanel history={alertHistory} />
         )}
 
       </main>

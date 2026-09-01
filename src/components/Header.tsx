@@ -1,21 +1,22 @@
 import React from 'react';
-import { 
-  Radio, 
-  Layers, 
-  BarChart3, 
-  ScanLine, 
-  Cpu, 
-  ClipboardCheck, 
+import {
+  Radio,
+  Layers,
+  BarChart3,
+  ScanLine,
+  Cpu,
+  ClipboardCheck,
   AlertTriangle,
   RefreshCw,
   Clock,
-  ShieldCheck
+  ShieldCheck,
+  History
 } from 'lucide-react';
 import { Asset, AnomalyAlert } from '../types';
 
 interface HeaderProps {
-  activeTab: 'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies';
-  setActiveTab: (tab: 'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies') => void;
+  activeTab: 'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies' | 'history';
+  setActiveTab: (tab: 'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies' | 'history') => void;
   assets: Asset[];
   alerts: AnomalyAlert[];
   onOpenCheckInOut: (type: 'checkout' | 'checkin') => void;
@@ -205,6 +206,19 @@ export const Header: React.FC<HeaderProps> = ({
                 {unresolvedAlerts}
               </span>
             )}
+          </button>
+
+          <button
+            id="tab-history"
+            onClick={() => setActiveTab('history')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === 'history'
+                ? 'bg-white text-neutral-900 shadow-2xs'
+                : 'text-neutral-600 hover:text-neutral-900'
+            }`}
+          >
+            <History className="w-3.5 h-3.5" />
+            <span>Audit Trail</span>
           </button>
         </div>
 

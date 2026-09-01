@@ -101,6 +101,15 @@ export interface NotificationDispatch {
   detail: string;
 }
 
+// Permanent audit-trail record of an alert: unlike AnomalyAlert (which only
+// reflects currently-active conditions), this persists even after the
+// underlying issue clears, so compliance/history review isn't limited to
+// "what's wrong right now."
+export interface AlertHistoryEntry extends AnomalyAlert {
+  first_seen_at: string;
+  cleared_at?: string;
+}
+
 export interface DemandForecastResult {
   site_id: string;
   site_name: string;

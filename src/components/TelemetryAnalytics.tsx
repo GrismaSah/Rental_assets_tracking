@@ -13,18 +13,20 @@ import {
   Filler,
 } from 'chart.js';
 import { Line, Doughnut, Bar } from 'react-chartjs-2';
-import { 
-  Fuel, 
-  Clock, 
-  DollarSign, 
-  Leaf, 
-  TrendingDown, 
-  AlertTriangle, 
+import {
+  Fuel,
+  Clock,
+  DollarSign,
+  Leaf,
+  TrendingDown,
+  AlertTriangle,
   Zap,
   Layers,
-  ArrowUpRight
+  ArrowUpRight,
+  Download
 } from 'lucide-react';
 import { Asset, Site } from '../types';
+import { downloadCsv } from '../utils/exportCsv';
 
 ChartJS.register(
   CategoryScale,
@@ -96,6 +98,102 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
     })
     .filter((row): row is NonNullable<typeof row> => row !== null)
     .sort((a, b) => b.totalIdleHours - a.totalIdleHours);
+
+  const handleExportSiteUsageCsv = () => {
+    downloadCsv(
+      `site-usage-downtime-summary-${new Date().toISOString().slice(0, 10)}.csv`,
+      ['Site ID', 'Site Name', 'Machines', 'Total Rental Days', 'Engine Hours', 'Idle Hours', 'Idle %', 'Downtime Units', 'Downtime Days'],
+      siteUsageSummary.map((row) => [
+        row.siteId,
+        row.siteName,
+        row.machineCount,
+        row.totalRentalDays,
+        row.totalEngineHours,
+        row.totalIdleHours,
+        row.idlePct,
+        row.downtimeUnits,
+        row.downtimeDays,
+      ])
+    );
+  };
+
+  // Fleet-Wide Utilization Trend Across the Rental Cycle: derived from real
+  // per-asset fields (engine_hours_day, idle_hours_day, operating_days) --
+  // each asset is assumed to hold a constant daily rate for the length of its
+  // own rental, so on "Day N" only assets whose operating_days >= N are still
+  // contributing hours. This shows how fleet-wide idle % shifts as shorter
+  // rentals finish and longer ones keep running, without fabricating data
+  // the app doesn't actually have.
+  const maxOperatingDays = Math.max(...assets.map((a) => a.operating_days), 1);
+  const trendDayLabels = Array.from({ length: maxOperatingDays }, (_, i) => `Day ${i + 1}`);
+  const idlePctTrend = Array.from({ length: maxOperatingDays }, (_, i) => {
+    const day = i + 1;
+    const activeOnDay = assets.filter((a) => a.operating_days >= day);
+    const engine = activeOnDay.reduce((acc, a) => acc + a.engine_hours_day, 0);
+    const idle = activeOnDay.reduce((acc, a) => acc + a.idle_hours_day, 0);
+    const total = engine + idle;
+    return total > 0 ? Math.round((idle / total) * 100) : 0;
+  });
+  const activeUnitsTrend = Array.from({ length: maxOperatingDays }, (_, i) => {
+    const day = i + 1;
+    return assets.filter((a) => a.operating_days >= day).length;
+  });
+
+  const utilizationTrendData = {
+    labels: trendDayLabels,
+    datasets: [
+      {
+        label: 'Fleet Idle % (of units still on rent that day)',
+        data: idlePctTrend,
+        borderColor: '#F59E0B',
+        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+        tension: 0.3,
+        fill: true,
+        pointRadius: 2,
+        yAxisID: 'y',
+      },
+      {
+        label: 'Units Still On Rent',
+        data: activeUnitsTrend,
+        borderColor: '#1D1D1F',
+        borderDash: [4, 4],
+        tension: 0.3,
+        pointRadius: 2,
+        yAxisID: 'y1',
+      },
+    ],
+  };
+
+  const utilizationTrendOptions: any = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+        labels: { boxWidth: 10, font: { size: 11 } },
+      },
+    },
+    scales: {
+      y: {
+        position: 'left' as const,
+        title: { display: true, text: 'Idle %', font: { size: 11 } },
+        grid: { color: 'rgba(0, 0, 0, 0.04)' },
+        ticks: { color: '#64748B', font: { size: 10 } },
+        min: 0,
+        max: 100,
+      },
+      y1: {
+        position: 'right' as const,
+        title: { display: true, text: 'Units On Rent', font: { size: 11 } },
+        grid: { display: false },
+        ticks: { color: '#64748B', font: { size: 10 }, stepSize: 1 },
+      },
+      x: {
+        grid: { display: false },
+        ticks: { color: '#64748B', font: { size: 10 } },
+      },
+    },
+  };
 
   // 1. Line Chart Data: 7-Day Fuel Burn Trend (Liters / Hour)
   const daysLabels = timeRange === '7d' 
@@ -490,20 +588,45 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
 
       </div>
 
+      {/* Fleet Utilization Trend Across Rental Cycle */}
+      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+        <div>
+          <h3 className="text-sm font-bold text-neutral-900">
+            Utilization Trend Across the Rental Cycle
+          </h3>
+          <p className="text-xs text-neutral-500">
+            Fleet-wide idle % and unit count by day-of-rental, computed from each machine's own operating window (Day 1 → Day {maxOperatingDays})
+          </p>
+        </div>
+        <div className="h-[260px] w-full pt-2">
+          <Line data={utilizationTrendData} options={utilizationTrendOptions} />
+        </div>
+      </div>
+
       {/* Usage & Downtime Summary Per Site */}
       <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-neutral-100 text-neutral-600">
-            <Layers className="w-3.5 h-3.5" />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-neutral-100 text-neutral-600">
+              <Layers className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-neutral-900">
+                Usage & Downtime Summary by Site
+              </h3>
+              <p className="text-xs text-neutral-500">
+                Cumulative rented hours and maintenance downtime, rolled up per job site
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-sm font-bold text-neutral-900">
-              Usage & Downtime Summary by Site
-            </h3>
-            <p className="text-xs text-neutral-500">
-              Cumulative rented hours and maintenance downtime, rolled up per job site
-            </p>
-          </div>
+
+          <button
+            onClick={handleExportSiteUsageCsv}
+            className="shrink-0 px-3 py-1.5 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors flex items-center gap-1.5"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export CSV
+          </button>
         </div>
 
         <div className="overflow-x-auto">
