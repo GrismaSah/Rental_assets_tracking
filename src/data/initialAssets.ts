@@ -172,12 +172,12 @@ export const INITIAL_ASSETS: Asset[] = [
 ];
 
 export const SITES: Site[] = [
-  { id: "S001", name: "SoCal Logistics Center / Nevada Solar Array", location: [34.0522, -118.2437], city: "Los Angeles / Las Vegas", state: "CA/NV", project_type: "Commercial Logistics & Energy", active_machinery_count: 2, supervisor: "Frank Castillo" },
-  { id: "S002", name: "Midwest Wind Farm", location: [41.8781, -87.6298], city: "Chicago Metro", state: "IL", project_type: "Renewable Energy Installation", active_machinery_count: 1, supervisor: "Karen Lind" },
-  { id: "S003", name: "Bay Area Transit Hub", location: [37.7749, -122.4194], city: "San Francisco", state: "CA", project_type: "Urban Transit Infrastructure", active_machinery_count: 1, supervisor: "Devon Reed" },
-  { id: "S004", name: "Houston Energy Complex", location: [29.7604, -95.3698], city: "Houston", state: "TX", project_type: "Petrochemical Infrastructure", active_machinery_count: 1, supervisor: "Carlos Mendez" },
-  { id: "S005", name: "Phoenix Airport Expansion", location: [33.4484, -112.0740], city: "Phoenix", state: "AZ", project_type: "Runway & Terminal Civils", active_machinery_count: 1, supervisor: "Travis Wade" },
-  { id: "S006", name: "Denver Highway Bypass", location: [39.7392, -104.9903], city: "Denver", state: "CO", project_type: "Interstate Highway Grading", active_machinery_count: 1, supervisor: "Rachel Gomez" }
+  { id: "S001", name: "SoCal Logistics Center / Nevada Solar Array", location: [34.0522, -118.2437], city: "Los Angeles / Las Vegas", state: "CA/NV", project_type: "Commercial Logistics & Energy", active_machinery_count: 2, supervisor: "Frank Castillo", supervisor_email: "frank.castillo@fleetops.example.com", supervisor_phone: "+1 (213) 555-0161" },
+  { id: "S002", name: "Midwest Wind Farm", location: [41.8781, -87.6298], city: "Chicago Metro", state: "IL", project_type: "Renewable Energy Installation", active_machinery_count: 1, supervisor: "Karen Lind", supervisor_email: "karen.lind@fleetops.example.com", supervisor_phone: "+1 (312) 555-0173" },
+  { id: "S003", name: "Bay Area Transit Hub", location: [37.7749, -122.4194], city: "San Francisco", state: "CA", project_type: "Urban Transit Infrastructure", active_machinery_count: 1, supervisor: "Devon Reed", supervisor_email: "devon.reed@fleetops.example.com", supervisor_phone: "+1 (415) 555-0148" },
+  { id: "S004", name: "Houston Energy Complex", location: [29.7604, -95.3698], city: "Houston", state: "TX", project_type: "Petrochemical Infrastructure", active_machinery_count: 1, supervisor: "Carlos Mendez", supervisor_email: "carlos.mendez@fleetops.example.com", supervisor_phone: "+1 (713) 555-0159" },
+  { id: "S005", name: "Phoenix Airport Expansion", location: [33.4484, -112.0740], city: "Phoenix", state: "AZ", project_type: "Runway & Terminal Civils", active_machinery_count: 1, supervisor: "Travis Wade", supervisor_email: "travis.wade@fleetops.example.com", supervisor_phone: "+1 (602) 555-0137" },
+  { id: "S006", name: "Denver Highway Bypass", location: [39.7392, -104.9903], city: "Denver", state: "CO", project_type: "Interstate Highway Grading", active_machinery_count: 1, supervisor: "Rachel Gomez", supervisor_email: "rachel.gomez@fleetops.example.com", supervisor_phone: "+1 (303) 555-0184" }
 ];
 
 export const OPERATORS: Operator[] = [

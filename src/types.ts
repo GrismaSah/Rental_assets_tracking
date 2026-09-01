@@ -36,6 +36,8 @@ export interface Site {
   project_type: string;
   active_machinery_count: number;
   supervisor: string;
+  supervisor_email: string;
+  supervisor_phone: string;
 }
 
 export interface Operator {
@@ -81,6 +83,22 @@ export interface AnomalyAlert {
   recommendation: string;
   timestamp: string;
   resolved: boolean;
+  notifications?: NotificationDispatch[];
+  notified_at?: string;
+}
+
+// Multi-channel delivery so the alert reaches whoever needs it: the office
+// (email, for a compliance/audit trail), the operator's own phone (SMS), and
+// the machine itself (in-cab console + audible alarm via Cat Product Link-style
+// telematics) — the last one is what still reaches the operator even if their
+// phone was left outside the cab, since it doesn't depend on a phone at all.
+export type NotificationChannel = 'Email' | 'SMS' | 'In-Cab Console Alert';
+
+export interface NotificationDispatch {
+  channel: NotificationChannel;
+  recipient: string;
+  status: 'Sent' | 'Delivered';
+  detail: string;
 }
 
 export interface DemandForecastResult {

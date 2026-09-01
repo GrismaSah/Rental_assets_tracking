@@ -9,6 +9,7 @@ import { AnomalyAlertsPanel } from './components/AnomalyAlertsPanel';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
 import { Asset, Site, Operator, AnomalyAlert, InspectionCheckItem } from './types';
 import { runAnomalyDetection } from './utils/anomalyDetector';
+import { dispatchNotification } from './utils/notificationDispatcher';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -203,6 +204,26 @@ export default function App() {
       prev.map((a) => (a.id === alertId ? { ...a, resolved: true } : a))
     );
     showToast('Alert Acknowledged', `Anomaly flag ${alertId} marked as reviewed.`);
+  };
+
+  // Handler: Dispatch multi-channel notification for an alert (Email + SMS + in-cab console)
+  const handleNotifyAlert = (alert: AnomalyAlert) => {
+    const asset = assets.find((a) => a.id === alert.asset_id);
+    const site = sites.find((s) => s.id === asset?.site_id);
+    const operator = operators.find((o) => o.id === asset?.operator_id);
+
+    const dispatches = dispatchNotification(alert, asset, site, operator);
+
+    setAlerts((prev) =>
+      prev.map((a) =>
+        a.id === alert.id ? { ...a, notifications: dispatches, notified_at: new Date().toISOString() } : a
+      )
+    );
+
+    showToast(
+      'Notification Dispatched',
+      `${alert.asset_id}: alerted via ${dispatches.map((d) => d.channel).join(', ')}.`
+    );
   };
 
   // Handler: Quick action from anomaly panel
@@ -473,6 +494,7 @@ export default function App() {
             assets={assets}
             onResolveAlert={handleResolveAlert}
             onTakeAction={handleAnomalyAction}
+            onNotify={handleNotifyAlert}
           />
         )}
 

@@ -35,35 +35,42 @@ export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
       });
     }
 
-    // Rule 3: Approaching / Overdue return date
-    const checkinDate = new Date(asset.checkin_date);
-    const now = new Date('2025-04-10'); // Anchor demo baseline
-    const diffDays = Math.ceil((checkinDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+    // Rule 3: Approaching / Overdue return date.
+    // Per Cat Rental Store terms, the rental term only ends once the unit is
+    // actually returned to the dealer, and overdue units continue to accrue
+    // daily rental (demurrage) charges — so this only applies to units still
+    // deployed on an active rental. A unit already checked back in (Idle /
+    // Under Maintenance) is no longer "out" against its old checkin_date.
+    if (asset.status === 'Active') {
+      const checkinDate = new Date(asset.checkin_date);
+      const now = new Date();
+      const diffDays = Math.ceil((checkinDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
 
-    if (diffDays < 0) {
-      alerts.push({
-        id: `ANOM-EXP-${asset.id}`,
-        asset_id: asset.id,
-        type: 'Overdue Rental',
-        severity: 'Critical',
-        description: `Rental lease expired ${Math.abs(diffDays)} days ago on ${asset.checkin_date}. Accruing unplanned demurrage rates.`,
-        metric_value: `${Math.abs(diffDays)} days overdue`,
-        recommendation: `Trigger mandatory return check-in or extend contractual rental lease with Caterpillar dealer.`,
-        timestamp: 'Contract Rule Trigger',
-        resolved: false,
-      });
-    } else if (diffDays <= 3) {
-      alerts.push({
-        id: `ANOM-EXP-WARN-${asset.id}`,
-        asset_id: asset.id,
-        type: 'Approaching Return',
-        severity: 'Warning',
-        description: `Rental agreement expires in ${diffDays} day(s) (${asset.checkin_date}). Plan haulage transport.`,
-        metric_value: `Due in ${diffDays}d`,
-        recommendation: `Schedule site demobilization and dispatch flatbed transport.`,
-        timestamp: 'Contract Rule Trigger',
-        resolved: false,
-      });
+      if (diffDays < 0) {
+        alerts.push({
+          id: `ANOM-EXP-${asset.id}`,
+          asset_id: asset.id,
+          type: 'Overdue Rental',
+          severity: 'Critical',
+          description: `Rental lease expired ${Math.abs(diffDays)} days ago on ${asset.checkin_date}. Unit is continuing to accrue daily rental (demurrage) charges until returned.`,
+          metric_value: `${Math.abs(diffDays)} days overdue`,
+          recommendation: `Trigger mandatory return check-in immediately, or call the Cat dealer now to extend the rental agreement and stop further billing.`,
+          timestamp: 'Contract Rule Trigger',
+          resolved: false,
+        });
+      } else if (diffDays <= 5) {
+        alerts.push({
+          id: `ANOM-EXP-WARN-${asset.id}`,
+          asset_id: asset.id,
+          type: 'Approaching Return',
+          severity: 'Warning',
+          description: `Rental agreement expires in ${diffDays} day(s) (${asset.checkin_date}). Cat dealer guidance: contact the dealer as early as possible to extend or confirm return, since early communication avoids late fees.`,
+          metric_value: `Due in ${diffDays}d`,
+          recommendation: `Call the dealer now to either extend the agreement or schedule site demobilization and flatbed transport before the due date.`,
+          timestamp: 'Contract Rule Trigger',
+          resolved: false,
+        });
+      }
     }
 
     // Rule 4: Low Health Score / Imminent Service

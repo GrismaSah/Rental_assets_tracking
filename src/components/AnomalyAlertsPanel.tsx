@@ -1,31 +1,43 @@
 import React, { useState } from 'react';
-import { 
-  AlertTriangle, 
-  Clock, 
-  UserX, 
-  CalendarX, 
-  Wrench, 
-  CheckCircle2, 
-  Fuel, 
-  ArrowRight, 
+import {
+  AlertTriangle,
+  Clock,
+  UserX,
+  CalendarX,
+  Wrench,
+  CheckCircle2,
+  Fuel,
+  ArrowRight,
   Filter,
   ShieldAlert,
-  Zap
+  Zap,
+  BellRing,
+  Mail,
+  MessageSquare,
+  MonitorSmartphone
 } from 'lucide-react';
-import { Asset, AnomalyAlert } from '../types';
+import { Asset, AnomalyAlert, NotificationChannel } from '../types';
 
 interface AnomalyAlertsPanelProps {
   alerts: AnomalyAlert[];
   assets: Asset[];
   onResolveAlert: (alertId: string) => void;
   onTakeAction: (asset: Asset, actionType: 'checkout' | 'checkin' | 'inspect') => void;
+  onNotify: (alert: AnomalyAlert) => void;
 }
+
+const channelIcon = (channel: NotificationChannel) => {
+  if (channel === 'Email') return Mail;
+  if (channel === 'SMS') return MessageSquare;
+  return MonitorSmartphone;
+};
 
 export const AnomalyAlertsPanel: React.FC<AnomalyAlertsPanelProps> = ({
   alerts,
   assets,
   onResolveAlert,
   onTakeAction,
+  onNotify,
 }) => {
   const [severityFilter, setSeverityFilter] = useState<'all' | 'Critical' | 'Warning'>('all');
 
@@ -164,11 +176,43 @@ export const AnomalyAlertsPanel: React.FC<AnomalyAlertsPanelProps> = ({
                         <strong>Recommended Protocol:</strong> {alert.recommendation}
                       </p>
                     </div>
+
+                    {/* Notification Delivery Log */}
+                    {alert.notifications && alert.notifications.length > 0 && (
+                      <div className="mt-2 p-2.5 rounded-xl bg-emerald-50/60 border border-emerald-100 space-y-1.5">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                          Notified {alert.notified_at ? new Date(alert.notified_at).toLocaleTimeString() : ''}
+                        </p>
+                        {alert.notifications.map((n, idx) => {
+                          const ChannelIcon = channelIcon(n.channel);
+                          return (
+                            <div key={idx} className="flex items-start gap-2 text-[11px] text-neutral-700">
+                              <ChannelIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                              <span>
+                                <strong>{n.channel}</strong> → {n.recipient}
+                                <span className="text-neutral-500"> — {n.detail}</span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 {/* Right Side Action Buttons */}
                 <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                  {!alert.resolved && (
+                    <button
+                      onClick={() => onNotify(alert)}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition-colors flex items-center gap-1.5"
+                      title="Send Email + SMS + in-cab console alert"
+                    >
+                      <BellRing className="w-3.5 h-3.5" />
+                      {alert.notifications ? 'Re-Notify' : 'Notify'}
+                    </button>
+                  )}
+
                   {asset && !alert.resolved && (
                     <>
                       {alert.type === 'Unassigned Operator' && (
