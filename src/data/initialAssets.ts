@@ -150,8 +150,8 @@ export const INITIAL_ASSETS: Asset[] = [
     type: "Excavator",
     model: "Cat 336 Heavy Excavator",
     serial_number: "CAT-336H-55091",
-    site_id: "S005",
-    site_name: "Phoenix Airport Expansion",
+    site_id: "",
+    site_name: "Unassigned – Awaiting Dispatch",
     checkout_date: "2026-08-15",
     checkin_date: "2026-08-27",
     engine_hours_day: 0,
@@ -167,7 +167,7 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 1200,
     last_maintenance_date: "2025-03-15",
     next_maintenance_hours: 90,
-    anomalies: ["No operator assigned", "Zero engine engagement for 12 days", "Expired rental lease"]
+    anomalies: ["No job site assignment — unit is unassigned", "No operator assigned", "Zero engine engagement for 12 days", "Expired rental lease"]
   }
 ];
 
