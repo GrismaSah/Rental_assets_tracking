@@ -14,7 +14,9 @@ import {
   ChevronRight,
   ArrowRight,
   Shield,
-  Gauge
+  Gauge,
+  QrCode,
+  History
 } from 'lucide-react';
 import { Asset, Site } from '../types';
 
@@ -25,6 +27,16 @@ interface FleetMapViewProps {
   onSelectAsset: (asset: Asset | null) => void;
   onCheckInOut: (asset: Asset, mode: 'checkin' | 'checkout') => void;
   onInspect: (asset: Asset) => void;
+  onShowQrCode: (asset: Asset) => void;
+}
+
+interface RentalEvent {
+  id: number;
+  event_type: 'checkout' | 'checkin';
+  site_name: string | null;
+  operator_name: string | null;
+  timestamp: string;
+  source: 'qr' | 'manual';
 }
 
 export const FleetMapView: React.FC<FleetMapViewProps> = ({
@@ -34,7 +46,20 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
   onSelectAsset,
   onCheckInOut,
   onInspect,
+  onShowQrCode,
 }) => {
+  const [rentalHistory, setRentalHistory] = useState<RentalEvent[]>([]);
+
+  useEffect(() => {
+    if (!selectedAsset) {
+      setRentalHistory([]);
+      return;
+    }
+    fetch(`/api/history/${selectedAsset.id}`)
+      .then((res) => res.json())
+      .then((data) => setRentalHistory(data.success ? data.events : []))
+      .catch(() => setRentalHistory([]));
+  }, [selectedAsset?.id]);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersRef = useRef<Record<string, L.Marker>>({});
@@ -445,6 +470,35 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
                 </div>
               </div>
 
+              {/* Rental History -- the permanent, per-machine event timeline
+                  (every real QR scan or manual check-in/out), which is the
+                  raw data a real demand-forecasting model would train on */}
+              <div className="p-3 bg-neutral-50 rounded-xl border border-neutral-100 space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-neutral-700 uppercase tracking-wider">
+                  <History className="w-3.5 h-3.5 text-neutral-500" />
+                  Rental History
+                </div>
+                {rentalHistory.length === 0 ? (
+                  <p className="text-[11px] text-neutral-400">No recorded events yet for this unit.</p>
+                ) : (
+                  <div className="space-y-1 max-h-28 overflow-y-auto pr-1">
+                    {rentalHistory.map((ev) => (
+                      <div key={ev.id} className="flex items-center justify-between text-[11px]">
+                        <span className="text-neutral-700">
+                          <span className={`font-bold ${ev.event_type === 'checkout' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                            {ev.event_type === 'checkout' ? 'Checked Out' : 'Checked In'}
+                          </span>
+                          {ev.site_name ? ` — ${ev.site_name}` : ''}
+                        </span>
+                        <span className="text-neutral-400 font-mono text-[10px]">
+                          {new Date(ev.timestamp).toLocaleDateString()} · {ev.source === 'qr' ? 'QR' : 'Manual'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Action Buttons */}
               <div className="grid grid-cols-2 gap-2 pt-1">
                 {selectedAsset.status === 'Active' ? (
@@ -469,6 +523,14 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
                 >
                   <Shield className="w-3.5 h-3.5 text-neutral-600" />
                   <span>Inspect Condition</span>
+                </button>
+
+                <button
+                  onClick={() => onShowQrCode(selectedAsset)}
+                  className="col-span-2 w-full py-2 px-3 rounded-xl text-xs font-bold bg-white text-neutral-800 border border-neutral-200 hover:bg-neutral-50 transition-colors shadow-2xs cursor-pointer flex items-center justify-center gap-1"
+                >
+                  <QrCode className="w-3.5 h-3.5 text-neutral-600" />
+                  <span>View QR Tag</span>
                 </button>
               </div>
             </div>

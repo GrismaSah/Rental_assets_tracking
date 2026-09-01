@@ -7,6 +7,8 @@ import { InspectionModal } from './components/InspectionModal';
 import { AiDemandForecaster } from './components/AiDemandForecaster';
 import { AnomalyAlertsPanel } from './components/AnomalyAlertsPanel';
 import { AlertHistoryPanel } from './components/AlertHistoryPanel';
+import { QrScannerModal } from './components/QrScannerModal';
+import { QrCodeModal } from './components/QrCodeModal';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
 import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem } from './types';
 import { runAnomalyDetection } from './utils/anomalyDetector';
@@ -36,6 +38,14 @@ export default function App() {
 
   const [isInspectionOpen, setIsInspectionOpen] = useState<boolean>(false);
   const [inspectionTargetAsset, setInspectionTargetAsset] = useState<Asset | null>(null);
+
+  // Whether the check-in/out form currently open was reached via a real QR
+  // scan or manual entry -- tagged onto the API call so the rental_events
+  // history table records how each event actually happened.
+  const [checkInOutSource, setCheckInOutSource] = useState<'manual' | 'qr'>('manual');
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
+  const [isQrCodeModalOpen, setIsQrCodeModalOpen] = useState<boolean>(false);
+  const [qrCodeAsset, setQrCodeAsset] = useState<Asset | null>(null);
 
   // Toast Notification
   const [toastMessage, setToastMessage] = useState<{ title: string; desc: string; type: 'success' | 'warning' } | null>(null);
@@ -148,12 +158,14 @@ export default function App() {
       })
     );
 
-    // Call backend API
+    // Call backend API -- tag whether this came from a real QR scan or
+    // manual entry, so the rental_events history table reflects it.
     fetch('/api/checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, source: checkInOutSource }),
     }).catch((e) => console.log(e));
+    setCheckInOutSource('manual');
 
     showToast(
       'Equipment Check-Out Authorized',
@@ -186,12 +198,14 @@ export default function App() {
       })
     );
 
-    // Call backend API
+    // Call backend API -- tag whether this came from a real QR scan or
+    // manual entry, so the rental_events history table reflects it.
     fetch('/api/checkin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, source: checkInOutSource }),
     }).catch((e) => console.log(e));
+    setCheckInOutSource('manual');
 
     showToast(
       'Check-In Handover Finalized',
@@ -242,6 +256,7 @@ export default function App() {
 
   // Helper: Open CheckIn/Out modal with preselected asset
   const triggerCheckInOutForAsset = (asset: Asset, mode: 'checkin' | 'checkout') => {
+    setCheckInOutSource('manual');
     setModalAsset(asset);
     setCheckInOutMode(mode);
     setIsCheckInOutOpen(true);
@@ -251,6 +266,25 @@ export default function App() {
   const triggerInspectionForAsset = (asset: Asset) => {
     setInspectionTargetAsset(asset);
     setIsInspectionOpen(true);
+  };
+
+  // Handler: QR scanner decoded a known machine -- open the check-in/out
+  // form pre-filled for it, defaulting to whichever direction makes sense
+  // given its current status (Active units are coming back in, everything
+  // else is going out to a customer).
+  const handleQrScanSuccess = (asset: Asset) => {
+    setIsQrScannerOpen(false);
+    setCheckInOutSource('qr');
+    setModalAsset(asset);
+    setCheckInOutMode(asset.status === 'Active' ? 'checkin' : 'checkout');
+    setIsCheckInOutOpen(true);
+    showToast('QR Tag Recognized', `${asset.id} (${asset.model}) matched — form pre-filled.`);
+  };
+
+  // Helper: Open the QR tag modal for a specific asset
+  const triggerShowQrCode = (asset: Asset) => {
+    setQrCodeAsset(asset);
+    setIsQrCodeModalOpen(true);
   };
 
   // Helper: Resolve anomaly alert
@@ -305,10 +339,12 @@ export default function App() {
         assets={assets}
         alerts={alerts}
         onOpenCheckInOut={(mode) => {
+          setCheckInOutSource('manual');
           setModalAsset(null);
           setCheckInOutMode(mode);
           setIsCheckInOutOpen(true);
         }}
+        onOpenQrScanner={() => setIsQrScannerOpen(true)}
         onOpenInspection={() => {
           setInspectionTargetAsset(assets[0]);
           setIsInspectionOpen(true);
@@ -331,6 +367,7 @@ export default function App() {
             onSelectAsset={setSelectedAsset}
             onCheckInOut={triggerCheckInOutForAsset}
             onInspect={triggerInspectionForAsset}
+            onShowQrCode={triggerShowQrCode}
           />
         )}
 
@@ -584,6 +621,28 @@ export default function App() {
         asset={inspectionTargetAsset || assets[0]}
         operators={operators}
         onSubmitInspection={handleInspectionSubmit}
+      />
+
+      {/* QR Scanner -- real camera-based scan, decodes to a machine's stable QR tag */}
+      <QrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => setIsQrScannerOpen(false)}
+        assets={assets}
+        onScanSuccess={handleQrScanSuccess}
+        onUseManualEntry={() => {
+          setIsQrScannerOpen(false);
+          setCheckInOutSource('manual');
+          setModalAsset(null);
+          setCheckInOutMode('checkout');
+          setIsCheckInOutOpen(true);
+        }}
+      />
+
+      {/* QR Tag viewer -- the permanent, printable QR code for one machine */}
+      <QrCodeModal
+        isOpen={isQrCodeModalOpen}
+        onClose={() => setIsQrCodeModalOpen(false)}
+        asset={qrCodeAsset}
       />
 
       {/* Floating Toast Notification */}

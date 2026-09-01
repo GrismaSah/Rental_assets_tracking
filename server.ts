@@ -36,6 +36,20 @@ db.exec(`
     data TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS rental_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    site_id TEXT,
+    site_name TEXT,
+    operator_id TEXT,
+    operator_name TEXT,
+    engine_hours_day REAL,
+    idle_hours_day REAL,
+    fuel_level_pct REAL,
+    timestamp TEXT NOT NULL,
+    source TEXT NOT NULL
+  );
 `);
 
 const upsertAssetStmt = db.prepare(
@@ -44,6 +58,11 @@ const upsertAssetStmt = db.prepare(
 const insertInspectionStmt = db.prepare(
   'INSERT INTO inspections (id, data, created_at) VALUES (?, ?, ?)'
 );
+const insertRentalEventStmt = db.prepare(`
+  INSERT INTO rental_events
+    (asset_id, event_type, site_id, site_name, operator_id, operator_name, engine_hours_day, idle_hours_day, fuel_level_pct, timestamp, source)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
 
 function persistAsset(asset: any) {
   upsertAssetStmt.run(asset.id, JSON.stringify(asset));
@@ -51,6 +70,34 @@ function persistAsset(asset: any) {
 
 function persistInspection(inspection: any) {
   insertInspectionStmt.run(inspection.id, JSON.stringify(inspection), inspection.timestamp);
+}
+
+// Permanent, append-only rental timeline per machine -- this is the actual
+// historical usage data a real demand-forecasting model would eventually
+// train on (equipment type, site, duration, how often it's re-rented). The
+// `assets` table only ever holds *current* state; this is what accumulates
+// over time as machines get checked out and back in, QR scan or manual.
+function recordRentalEvent(asset: any, eventType: 'checkout' | 'checkin', source: 'qr' | 'manual') {
+  insertRentalEventStmt.run(
+    asset.id,
+    eventType,
+    asset.site_id || null,
+    asset.site_name || null,
+    asset.operator_id || null,
+    asset.operator_name || null,
+    asset.engine_hours_day ?? null,
+    asset.idle_hours_day ?? null,
+    asset.fuel_level_pct ?? null,
+    new Date().toISOString(),
+    source
+  );
+}
+
+function getRentalHistory(assetId?: string) {
+  const rows = assetId
+    ? db.prepare('SELECT * FROM rental_events WHERE asset_id = ? ORDER BY timestamp DESC').all(assetId)
+    : db.prepare('SELECT * FROM rental_events ORDER BY timestamp DESC').all();
+  return rows;
 }
 
 function loadOrSeedAssets(): any[] {
@@ -116,7 +163,7 @@ app.get('/api/assets/:id', (req, res) => {
 
 // 3. Check-Out Asset
 app.post('/api/checkout', (req, res) => {
-  const { asset_id, site_id, operator_id, checkout_date, checkin_date, starting_fuel } = req.body;
+  const { asset_id, site_id, operator_id, checkout_date, checkin_date, starting_fuel, source } = req.body;
 
   const index = fleetAssets.findIndex((a) => a.id.toLowerCase() === asset_id?.toLowerCase());
   if (index === -1) {
@@ -125,6 +172,8 @@ app.post('/api/checkout', (req, res) => {
 
   const site = SITES.find((s) => s.id === site_id);
   const operator = OPERATORS.find((o) => o.id === operator_id);
+  const defaultReturn = new Date();
+  defaultReturn.setDate(defaultReturn.getDate() + 14);
 
   fleetAssets[index] = {
     ...fleetAssets[index],
@@ -133,13 +182,14 @@ app.post('/api/checkout', (req, res) => {
     operator_id: operator_id || null,
     operator_name: operator ? operator.name : null,
     checkout_date: checkout_date || new Date().toISOString().split('T')[0],
-    checkin_date: checkin_date || '2025-05-30',
+    checkin_date: checkin_date || defaultReturn.toISOString().split('T')[0],
     status: 'Active',
     fuel_level_pct: starting_fuel !== undefined ? starting_fuel : fleetAssets[index].fuel_level_pct,
     location: site ? site.location : fleetAssets[index].location,
     anomalies: [],
   };
   persistAsset(fleetAssets[index]);
+  recordRentalEvent(fleetAssets[index], 'checkout', source === 'qr' ? 'qr' : 'manual');
 
   res.json({
     success: true,
@@ -150,7 +200,7 @@ app.post('/api/checkout', (req, res) => {
 
 // 4. Check-In Asset
 app.post('/api/checkin', (req, res) => {
-  const { asset_id, return_site_id, ending_engine_hours, fuel_level_pct, inspection_notes, status } = req.body;
+  const { asset_id, return_site_id, ending_engine_hours, fuel_level_pct, inspection_notes, status, source } = req.body;
 
   const index = fleetAssets.findIndex((a) => a.id.toLowerCase() === asset_id?.toLowerCase());
   if (index === -1) {
@@ -166,12 +216,24 @@ app.post('/api/checkin', (req, res) => {
     anomalies: [],
   };
   persistAsset(fleetAssets[index]);
+  recordRentalEvent(fleetAssets[index], 'checkin', source === 'qr' ? 'qr' : 'manual');
 
   res.json({
     success: true,
     message: `Asset ${asset_id} checked in successfully`,
     asset: fleetAssets[index],
   });
+});
+
+// 4b. Rental history -- the permanent per-machine timeline used for demand
+// forecasting down the line. /api/history/:assetId scopes to one machine;
+// /api/history returns the full fleet-wide event log.
+app.get('/api/history/:assetId', (req, res) => {
+  res.json({ success: true, events: getRentalHistory(req.params.assetId) });
+});
+
+app.get('/api/history', (req, res) => {
+  res.json({ success: true, events: getRentalHistory() });
 });
 
 // 5. Submit Inspection Checklist
