@@ -1,17 +1,19 @@
 import { Asset, AnomalyAlert } from '../types';
+import { BUSINESS_RULES, getRuleEvaluationTime } from '../config/businessRules';
 
-export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
+export function runAnomalyDetection(assets: Asset[], evaluationTime?: Date | string): AnomalyAlert[] {
   const alerts: AnomalyAlert[] = [];
+  const now = getRuleEvaluationTime(evaluationTime);
 
   assets.forEach((asset) => {
     // Rule 1: High Idle Hours (> 8 hours/day)
-    if (asset.idle_hours_day > 8) {
+    if (asset.idle_hours_day > BUSINESS_RULES.highIdleHoursPerDay.warning) {
       const estimatedWastedCost = Math.round(asset.idle_hours_day * asset.operating_days * 38);
       alerts.push({
         id: `ANOM-IDLE-${asset.id}`,
         asset_id: asset.id,
         type: 'High Idle',
-        severity: asset.idle_hours_day >= 11 ? 'Critical' : 'Warning',
+        severity: asset.idle_hours_day >= BUSINESS_RULES.highIdleHoursPerDay.critical ? 'Critical' : 'Warning',
         description: `Severe machine idling detected at ${asset.site_name}. Machine is idling ${asset.idle_hours_day} hrs/day (${Math.round((asset.idle_hours_day / (asset.idle_hours_day + Math.max(asset.engine_hours_day, 0.1))) * 100)}% of shift).`,
         metric_value: `${asset.idle_hours_day}h idle / day`,
         recommendation: `Reallocate asset to an active site or return early to save ~$${estimatedWastedCost.toLocaleString()} in wasted rental & fuel costs.`,
@@ -61,7 +63,6 @@ export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
     // Under Maintenance) is no longer "out" against its old checkin_date.
     if (asset.status === 'Active') {
       const checkinDate = new Date(asset.checkin_date);
-      const now = new Date();
       const diffDays = Math.ceil((checkinDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
 
       if (diffDays < 0) {
@@ -76,7 +77,7 @@ export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
           timestamp: 'Contract Rule Trigger',
           resolved: false,
         });
-      } else if (diffDays <= 5) {
+      } else if (diffDays <= BUSINESS_RULES.returnDueSoonDays) {
         alerts.push({
           id: `ANOM-EXP-WARN-${asset.id}`,
           asset_id: asset.id,
@@ -92,12 +93,16 @@ export function runAnomalyDetection(assets: Asset[]): AnomalyAlert[] {
     }
 
     // Rule 5: Low Health Score / Imminent Service
-    if (asset.health_score < 70 || asset.status === 'Under Maintenance' || asset.next_maintenance_hours <= 0) {
+    if (
+      asset.health_score < BUSINESS_RULES.maintenanceHealthWarning ||
+      asset.status === 'Under Maintenance' ||
+      asset.next_maintenance_hours <= BUSINESS_RULES.maintenanceHoursDue
+    ) {
       alerts.push({
         id: `ANOM-MAINT-${asset.id}`,
         asset_id: asset.id,
         type: 'Low Health / Maintenance',
-        severity: asset.health_score < 60 ? 'Critical' : 'Warning',
+        severity: asset.health_score < BUSINESS_RULES.maintenanceHealthCritical ? 'Critical' : 'Warning',
         description: `Cat Product Link™ diagnostic telemetry indicates maintenance required. Health index is ${asset.health_score}%.`,
         metric_value: `Health: ${asset.health_score}% | ${asset.next_maintenance_hours}h to service`,
         recommendation: `Dispatch Cat certified field technician for hydraulic and oil sample analysis.`,
