@@ -272,7 +272,7 @@ app.post('/api/forecast', async (req, res) => {
   const client = getGeminiClient();
 
   if (client) {
-    try {
+    {
       const prompt = `You are the Lead Fleet Engineer at Caterpillar. Provide a structured machinery demand forecast for the following heavy construction project:
 Site: ${site.name} (${site.city}, ${site.state})
 Project Type: ${project_type || site.project_type}
@@ -314,25 +314,39 @@ Return a valid JSON object matching this schema:
 }
 Only output valid JSON.`;
 
-      const aiResponse = await client.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        },
-      });
+      // Gemini's shared capacity occasionally returns a transient 503
+      // ("model currently experiencing high demand"). Retry a couple of
+      // times with a short backoff before giving up to the rules-engine
+      // fallback, since a single 503 shouldn't take the AI path down.
+      const maxAttempts = 3;
+      let lastErr: any;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const aiResponse = await client.models.generateContent({
+            model: 'gemini-3.7-flash',
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+              temperature: 0.2,
+            },
+          });
 
-      const parsed = JSON.parse(aiResponse.text || '{}');
-      return res.json({
-        success: true,
-        forecast: {
-          ...parsed,
-          source: 'gemini',
-        },
-      });
-    } catch (err: any) {
-      console.warn('Gemini forecast API fallback triggered:', err.message);
+          const parsed = JSON.parse(aiResponse.text || '{}');
+          return res.json({
+            success: true,
+            forecast: {
+              ...parsed,
+              source: 'gemini',
+            },
+          });
+        } catch (err: any) {
+          lastErr = err;
+          const isRetryable = err.message?.includes('503') || err.message?.includes('UNAVAILABLE');
+          if (!isRetryable || attempt === maxAttempts) break;
+          await new Promise((r) => setTimeout(r, attempt * 700));
+        }
+      }
+      console.warn('Gemini forecast API fallback triggered:', lastErr?.message);
     }
   }
 

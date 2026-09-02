@@ -348,8 +348,8 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F5F7] text-[#1D1D1F] flex flex-col antialiased">
-      
+    <div className="min-h-screen bg-[#FAFAFA] text-[#1D1D1F] flex flex-col antialiased">
+
       {/* Executive Header */}
       <Header
         activeTab={activeTab}
@@ -373,7 +373,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6 animate-fadeIn">
         
         {/* Layer 3: Executive Fleet Map View */}
         {activeTab === 'map' && (
@@ -403,26 +403,26 @@ export default function App() {
         {/* Layer 1: Check-In / Out Hub Tab */}
         {activeTab === 'checkinout' && (
           <div className="space-y-6">
-            <div className="bg-white p-6 rounded-2xl border border-black/5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-neutral-200/70">
               <div>
-                <h2 className="text-lg font-bold text-neutral-900">
-                  Equipment Check-In & Check-Out Terminal
+                <h2 className="text-[17px] font-semibold text-neutral-900 tracking-tight">
+                  Check-In & Check-Out
                 </h2>
-                <p className="text-xs text-neutral-500 mt-1">
-                  Authorize heavy machinery handovers, scan RFID tags, assign certified operators, and log odometer engine hours.
+                <p className="text-[13px] text-neutral-500 mt-0.5">
+                  Authorize handovers, assign operators, and log engine hours.
                 </p>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5">
                 <button
                   onClick={() => {
                     setModalAsset(null);
                     setCheckInOutMode('checkout');
                     setIsCheckInOutOpen(true);
                   }}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-[#FFCD00] text-neutral-950 hover:bg-[#F5C400] transition-all shadow-2xs cursor-pointer"
+                  className="px-4 py-2.5 rounded-lg text-[12.5px] font-semibold bg-[#FFCD00] text-neutral-950 hover:bg-[#F0C300] transition-colors cursor-pointer"
                 >
-                  + Deploy New Check-Out
+                  New Check-Out
                 </button>
                 <button
                   onClick={() => {
@@ -430,9 +430,9 @@ export default function App() {
                     setCheckInOutMode('checkin');
                     setIsCheckInOutOpen(true);
                   }}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-all shadow-2xs cursor-pointer"
+                  className="px-4 py-2.5 rounded-lg text-[12.5px] font-semibold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors cursor-pointer"
                 >
-                  Return / Check-In Unit
+                  Check-In Unit
                 </button>
               </div>
             </div>
@@ -442,7 +442,7 @@ export default function App() {
               {assets.map((asset) => (
                 <div
                   key={asset.id}
-                  className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs flex flex-col justify-between space-y-4 hover:shadow-md transition-shadow"
+                  className="bg-white p-5 rounded-2xl border border-neutral-200/70 flex flex-col justify-between space-y-4 hover:border-neutral-300 hover:shadow-sm transition-all"
                 >
                   <div>
                     <div className="flex items-start justify-between">
@@ -495,14 +495,14 @@ export default function App() {
                     {asset.status === 'Active' ? (
                       <button
                         onClick={() => triggerCheckInOutForAsset(asset, 'checkin')}
-                        className="w-full py-2 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors"
+                        className="w-full py-2 rounded-lg text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors cursor-pointer"
                       >
                         Check-In Return
                       </button>
                     ) : (
                       <button
                         onClick={() => triggerCheckInOutForAsset(asset, 'checkout')}
-                        className="w-full py-2 rounded-xl text-xs font-bold bg-[#FFCD00] text-neutral-950 hover:bg-[#F5C400] transition-colors"
+                        className="w-full py-2 rounded-lg text-xs font-bold bg-[#FFCD00] text-neutral-950 hover:bg-[#F0C300] transition-colors cursor-pointer"
                       >
                         Deploy Unit
                       </button>
@@ -510,7 +510,7 @@ export default function App() {
 
                     <button
                       onClick={() => triggerInspectionForAsset(asset)}
-                      className="w-full py-2 rounded-xl text-xs font-bold bg-white text-neutral-800 border border-neutral-200 hover:bg-neutral-50 transition-colors"
+                      className="w-full py-2 rounded-lg text-xs font-bold bg-white text-neutral-800 border border-neutral-200 hover:bg-neutral-50 transition-colors cursor-pointer"
                     >
                       Inspect
                     </button>
@@ -535,13 +535,13 @@ export default function App() {
         {/* Layer 2: Safety & Condition Inspection */}
         {activeTab === 'inspection' && (
           <div className="space-y-5">
-            <div className="bg-white p-6 rounded-2xl border border-black/5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-5 border-b border-neutral-200/70">
               <div>
-                <h2 className="text-lg font-bold text-neutral-900">
-                  Caterpillar Fleet Safety & Inspection Center
+                <h2 className="text-[17px] font-semibold text-neutral-900 tracking-tight">
+                  Safety & Condition Inspection
                 </h2>
-                <p className="text-xs text-neutral-500 mt-1">
-                  Perform digital 5-point walkaround checks, hydraulic fluid tests, undercarriage assessments, and generate official release certificates.
+                <p className="text-[13px] text-neutral-500 mt-0.5">
+                  Digital walkaround checks and condition certificates for every unit.
                 </p>
               </div>
 
@@ -550,9 +550,9 @@ export default function App() {
                   setInspectionTargetAsset(assets[0]);
                   setIsInspectionOpen(true);
                 }}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold bg-[#FFCD00] text-neutral-950 hover:bg-[#F5C400] transition-colors shadow-2xs"
+                className="px-4 py-2.5 rounded-lg text-[12.5px] font-semibold bg-[#FFCD00] text-neutral-950 hover:bg-[#F0C300] transition-colors cursor-pointer"
               >
-                + Start New Walkaround Check
+                Start Walkaround Check
               </button>
             </div>
 
@@ -560,7 +560,7 @@ export default function App() {
               {assets.map((asset) => (
                 <div
                   key={asset.id}
-                  className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-4"
+                  className="bg-white p-5 rounded-2xl border border-neutral-200/70 hover:border-neutral-300 hover:shadow-sm transition-all space-y-4"
                 >
                   <div className="flex items-start justify-between">
                     <div>
@@ -590,7 +590,7 @@ export default function App() {
 
                   <button
                     onClick={() => triggerInspectionForAsset(asset)}
-                    className="w-full py-2.5 rounded-xl text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+                    className="w-full py-2.5 rounded-lg text-xs font-bold bg-neutral-900 text-white hover:bg-neutral-800 transition-colors cursor-pointer"
                   >
                     Conduct Inspection
                   </button>
@@ -651,7 +651,7 @@ export default function App() {
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 animate-slideUp">
           <div
-            className={`p-4 rounded-2xl shadow-xl border flex items-start gap-3 max-w-sm backdrop-blur-md ${
+            className={`p-4 rounded-xl shadow-lg border flex items-start gap-3 max-w-sm backdrop-blur-md ${
               toastMessage.type === 'warning'
                 ? 'bg-amber-50/95 border-amber-200 text-amber-900'
                 : 'bg-neutral-900/95 text-white border-neutral-800'
@@ -664,7 +664,7 @@ export default function App() {
             )}
             <div>
               <div className="text-xs font-bold">{toastMessage.title}</div>
-              <div className="text-[11px] text-neutral-300 mt-0.5 leading-snug">
+              <div className={`text-[11px] mt-0.5 leading-snug ${toastMessage.type === 'warning' ? 'text-amber-700' : 'text-neutral-300'}`}>
                 {toastMessage.desc}
               </div>
             </div>

@@ -351,7 +351,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         
         {/* Card 1: Fleet Idle Ratio */}
-        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-4 rounded-2xl border border-neutral-200/70 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-neutral-500">Fleet Idle Ratio</span>
             <div className="p-2 rounded-xl bg-amber-50 text-amber-600">
@@ -372,7 +372,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
         </div>
 
         {/* Card 2: Financial Idle Waste */}
-        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-4 rounded-2xl border border-neutral-200/70 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-neutral-500">Daily Idling Waste</span>
             <div className="p-2 rounded-xl bg-rose-50 text-rose-600">
@@ -391,7 +391,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
         </div>
 
         {/* Card 3: Avg Fleet Fuel Burn */}
-        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-4 rounded-2xl border border-neutral-200/70 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-neutral-500">Fleet Avg Burn</span>
             <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
@@ -410,7 +410,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
         </div>
 
         {/* Card 4: CO2 Environmental Impact */}
-        <div className="bg-white p-4 rounded-2xl border border-black/5 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-4 rounded-2xl border border-neutral-200/70 flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-neutral-500">Idle CO2 Footprint</span>
             <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600">
@@ -434,7 +434,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         
         {/* 7-Day Fuel Burn Trend Line Chart */}
-        <div className="lg:col-span-8 bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+        <div className="lg:col-span-8 bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-3">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-neutral-900">
@@ -471,7 +471,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
         </div>
 
         {/* Runtime vs Idle Hours Doughnut Distribution */}
-        <div className="lg:col-span-4 bg-white p-5 rounded-2xl border border-black/5 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-4 bg-white p-5 rounded-2xl border border-neutral-200/70 flex flex-col justify-between">
           <div>
             <h3 className="text-sm font-bold text-neutral-900">
               Shift Productivity Distribution
@@ -504,7 +504,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         
         {/* Machine Breakdown Stacked Bar Chart */}
-        <div className="lg:col-span-6 bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+        <div className="lg:col-span-6 bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-3">
           <div>
             <h3 className="text-sm font-bold text-neutral-900">
               Asset Runtime vs. Idle Hours Breakdown
@@ -520,7 +520,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
         </div>
 
         {/* Machine Roster Utilization Rank Table */}
-        <div className="lg:col-span-6 bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+        <div className="lg:col-span-6 bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-3">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-neutral-900">
@@ -589,7 +589,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       </div>
 
       {/* Fleet Utilization Trend Across Rental Cycle */}
-      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+      <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-3">
         <div>
           <h3 className="text-sm font-bold text-neutral-900">
             Utilization Trend Across the Rental Cycle
@@ -604,7 +604,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       </div>
 
       {/* Usage & Downtime Summary Per Site */}
-      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+      <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-neutral-100 text-neutral-600">

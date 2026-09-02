@@ -53,7 +53,7 @@ export const AnomalyAlertsPanel: React.FC<AnomalyAlertsPanelProps> = ({
   return (
     <div className="space-y-5">
       {/* Header Stat Row */}
-      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold border border-rose-100 shadow-xs">
             <AlertTriangle className="w-6 h-6" />

@@ -105,21 +105,34 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
       }
     });
 
-    let tileUrl = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
-    let attribution = '&copy; <a href="https://carto.com/">CARTO</a> OpenStreetMap';
+    // Esri's free, key-less basemap tiles -- CARTO's anonymous tile endpoints
+    // now require a registered API key and return a placeholder image, and
+    // the OSM tile servers reject unauthenticated app traffic outright.
+    let tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
+    let attribution = '&copy; Esri';
+    let maxZoom = 16;
+    let referenceUrl: string | null = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
 
     if (mapStyle === 'osm') {
-      tileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-      attribution = '&copy; OpenStreetMap contributors';
+      tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+      attribution = '&copy; Esri &mdash; Garmin, USGS, NPS';
+      maxZoom = 19;
+      referenceUrl = null;
     } else if (mapStyle === 'satellite') {
       tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
       attribution = '&copy; Esri &mdash; Earthstar Geographics';
+      maxZoom = 19;
+      referenceUrl = null;
     }
 
     L.tileLayer(tileUrl, {
       attribution,
-      maxZoom: 19,
+      maxZoom,
     }).addTo(map);
+
+    if (referenceUrl) {
+      L.tileLayer(referenceUrl, { maxZoom }).addTo(map);
+    }
 
     // Invalidate size on mount for responsive containers
     setTimeout(() => {
@@ -199,7 +212,7 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
   return (
     <div className="space-y-4">
       {/* Top Filter and Search Control Bar */}
-      <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-black/5 shadow-xs flex flex-wrap items-center justify-between gap-3">
+      <div className="bg-white/80 backdrop-blur-md p-3 rounded-2xl border border-neutral-200/70 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[280px]">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px] max-w-sm">
@@ -292,7 +305,7 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
               mapStyle === 'osm' ? 'bg-white text-neutral-900 shadow-2xs font-semibold' : 'text-neutral-500'
             }`}
           >
-            OSM
+            Streets
           </button>
         </div>
       </div>
@@ -301,7 +314,7 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
         
         {/* Left Side: Leaflet Interactive Map View */}
-        <div className="lg:col-span-8 bg-white p-2 rounded-2xl border border-black/5 shadow-xs overflow-hidden relative">
+        <div className="lg:col-span-8 bg-white p-2 rounded-2xl border border-neutral-200/70 overflow-hidden relative">
           <div 
             ref={mapContainerRef} 
             className="w-full h-[540px] rounded-xl bg-neutral-100 relative z-10"
@@ -323,7 +336,7 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
         {/* Right Side: Selected Asset Inspector Card / Fleet Carousel */}
         <div className="lg:col-span-4 space-y-4">
           {selectedAsset ? (
-            <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-4 animate-fadeIn">
+            <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-4 animate-fadeIn">
               {/* Card Top Title & Close */}
               <div className="flex items-start justify-between">
                 <div>
@@ -535,7 +548,7 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
               </div>
             </div>
           ) : (
-            <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-3">
+            <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-bold text-neutral-900">
                   Fleet Roster ({filteredAssets.length})

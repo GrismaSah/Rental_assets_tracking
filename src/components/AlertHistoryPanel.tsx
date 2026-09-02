@@ -30,7 +30,7 @@ export const AlertHistoryPanel: React.FC<AlertHistoryPanelProps> = ({ history })
 
   return (
     <div className="space-y-5">
-      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <div className="w-11 h-11 rounded-2xl bg-neutral-900 text-[#FFCD00] flex items-center justify-center font-bold shadow-xs">
             <History className="w-6 h-6" />
@@ -73,7 +73,7 @@ export const AlertHistoryPanel: React.FC<AlertHistoryPanelProps> = ({ history })
         </div>
       </div>
 
-      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs">
+      <div className="bg-white p-5 rounded-2xl border border-neutral-200/70">
         {filtered.length === 0 ? (
           <p className="text-xs text-neutral-400 text-center py-8">No alert history matches this filter yet.</p>
         ) : (

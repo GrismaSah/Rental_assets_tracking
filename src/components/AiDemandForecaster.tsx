@@ -66,7 +66,7 @@ export const AiDemandForecaster: React.FC<AiDemandForecasterProps> = ({
   return (
     <div className="space-y-5">
       {/* Title Card */}
-      <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <div className="w-11 h-11 rounded-2xl bg-neutral-900 text-[#FFCD00] flex items-center justify-center font-bold shadow-xs">
             <Cpu className="w-6 h-6" />
@@ -110,7 +110,7 @@ export const AiDemandForecaster: React.FC<AiDemandForecasterProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         
         {/* Left Side: Parameters Controller */}
-        <div className="lg:col-span-5 bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-4">
+        <div className="lg:col-span-5 bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-4">
           <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-500 flex items-center gap-1.5">
               <Sliders className="w-3.5 h-3.5" />
@@ -247,7 +247,7 @@ export const AiDemandForecaster: React.FC<AiDemandForecasterProps> = ({
         {/* Right Side: Prediction Results Display */}
         <div className="lg:col-span-7 space-y-4">
           {forecastResult ? (
-            <div className="bg-white p-5 rounded-2xl border border-black/5 shadow-xs space-y-4 animate-fadeIn">
+            <div className="bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-4 animate-fadeIn">
               
               {/* Top Output Stats */}
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-100 pb-3">
@@ -359,7 +359,7 @@ export const AiDemandForecaster: React.FC<AiDemandForecasterProps> = ({
 
             </div>
           ) : (
-            <div className="bg-white p-12 rounded-2xl border border-black/5 shadow-xs flex flex-col items-center justify-center text-center space-y-3">
+            <div className="bg-white p-12 rounded-2xl border border-neutral-200/70 flex flex-col items-center justify-center text-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-neutral-100 text-neutral-400 flex items-center justify-center">
                 <Sparkles className="w-7 h-7 text-[#FFCD00]" />
               </div>
