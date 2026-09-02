@@ -2,9 +2,9 @@
 
 @layer base {
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Plus Jakarta Sans", "Helvetica Neue", sans-serif;
-    color: #1D1D1F;
-    background-color: #FAFAFA;
+    font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+    color: #20272a;
+    background-color: #edf0ec;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -17,6 +17,16 @@
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+.smartrent-rail { position:fixed; inset:0 auto 0 0; z-index:40; width:248px; background:#111617; color:#d9e0df; transition:transform .25s ease; }
+.smartrent-mark { display:grid; height:34px; width:34px; place-items:center; background:#f6af32; color:#161b1d; clip-path:polygon(18% 0,100% 0,82% 100%,0 100%); font-weight:900; }
+.smartrent-nav { display:flex; width:100%; align-items:center; gap:12px; border-radius:10px; padding:11px 14px; color:#9ca8a8; text-align:left; transition:.18s; font-size:13px; font-weight:600; }
+.smartrent-nav:hover,.smartrent-nav.is-active { background:rgba(246,175,50,.12); color:#fff; }.smartrent-nav.is-active { box-shadow:inset 3px 0 #f6af32; }
+.smartrent-topbar { position:sticky; top:0; z-index:20; display:flex; height:76px; align-items:center; justify-content:space-between; gap:16px; border-bottom:1px solid #dfe3df; background:#f8f8f4; padding:0 32px; }
+.smartrent-search { display:flex; width:min(370px,36vw); align-items:center; gap:9px; border:1px solid #dce2de; border-radius:10px; background:#edf0ec; padding:9px 12px; }.smartrent-search input{width:100%;border:0;outline:0;background:transparent;font-size:14px;}
+.smartrent-primary { display:inline-flex; align-items:center; gap:8px; border-radius:9px; background:#f6af32; padding:10px 14px; color:#161b1d; font-size:13px; font-weight:700; }
+.smartrent-eyebrow { font:700 10px ui-monospace, monospace; letter-spacing:.12em; text-transform:uppercase; color:#667174; }.smartrent-title { margin-top:4px; font-size:30px; line-height:1.1; font-weight:800; letter-spacing:-.03em; color:#20272a; }.smartrent-panel,.smartrent-metric { border:1px solid #dce2de; border-radius:15px; background:#f9faf7; box-shadow:0 12px 28px rgba(22,27,29,.045); }.smartrent-metric { min-height:128px; padding:16px; }.smartrent-outline { display:inline-flex; align-items:center; gap:8px; border:1px solid #d5dcda; border-radius:9px; background:#fff; padding:10px 14px; color:#263033; font-size:13px; font-weight:700; }.smartrent-donut { display:grid; height:152px; width:152px; place-items:center; border-radius:50%; background:conic-gradient(#22d3dd 0 var(--pct),#dfe8e5 var(--pct) 1turn); }.smartrent-donut>div{display:grid; height:104px; width:104px; place-items:center; border-radius:50%; background:#f9faf7; text-align:center;}.smartrent-donut strong{display:block;font-size:25px;}.smartrent-donut small{font:700 9px ui-monospace,monospace;color:#758083}.smartrent-table{width:100%;border-collapse:collapse}.smartrent-table th{padding:12px 18px;border-bottom:1px solid #dfe4e1;color:#778083;font:700 10px ui-monospace,monospace;letter-spacing:.07em;text-align:left;text-transform:uppercase}.smartrent-table td{padding:13px 18px;border-bottom:1px solid #e9ece9;font-size:13px;cursor:pointer}.smartrent-table tr:hover{background:#eff6f4}.smartrent-table small{display:block;margin-top:2px;color:#758083}.smartrent-status{display:inline-flex;border-radius:999px;padding:5px 8px;font-size:11px;font-weight:700}.smartrent-status.inuse{background:#def4f5;color:#087b84}.smartrent-status.idle{background:#fff0cf;color:#9a6507}.smartrent-status.maintenance{background:#ece7fb;color:#6250a7}
+@media (max-width: 639px) { .smartrent-rail { transform:translateX(-100%); }.smartrent-rail.is-open { transform:none; }.smartrent-topbar { padding:0 16px; }.smartrent-search { display:none; } }
 
 .scrollbar-none {
   scrollbar-width: none;

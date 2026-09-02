@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
-import { FleetMapView } from './components/FleetMapView';
 import { TelemetryAnalytics } from './components/TelemetryAnalytics';
 import { CheckInOutModal } from './components/CheckInOutModal';
 import { InspectionModal } from './components/InspectionModal';
@@ -8,6 +7,7 @@ import { AiDemandForecaster } from './components/AiDemandForecaster';
 import { AnomalyAlertsPanel } from './components/AnomalyAlertsPanel';
 import { AlertHistoryPanel } from './components/AlertHistoryPanel';
 import { QrCodeModal } from './components/QrCodeModal';
+import { ExecutiveDashboard } from './components/ExecutiveDashboard';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
 import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem } from './types';
 import { runAnomalyDetection } from './utils/anomalyDetector';
@@ -348,7 +348,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#FAFAFA] text-[#1D1D1F] flex flex-col antialiased">
+    <div className="min-h-screen bg-[#edf0ec] text-[#20272a] antialiased sm:pl-[248px]">
 
       {/* Executive Header */}
       <Header
@@ -373,20 +373,10 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6 animate-fadeIn">
+      <main className="mx-auto w-full max-w-[1660px] space-y-6 p-4 sm:p-8 lg:p-10 animate-fadeIn">
         
         {/* Layer 3: Executive Fleet Map View */}
-        {activeTab === 'map' && (
-          <FleetMapView
-            assets={assets}
-            sites={sites}
-            selectedAsset={selectedAsset}
-            onSelectAsset={setSelectedAsset}
-            onCheckInOut={triggerCheckInOutForAsset}
-            onInspect={triggerInspectionForAsset}
-            onShowQrCode={triggerShowQrCode}
-          />
-        )}
+        {activeTab === 'map' && <ExecutiveDashboard assets={assets} sites={sites} alerts={alerts} onSelectAsset={(asset) => { setSelectedAsset(asset); setActiveTab('checkinout'); }} onOpenAlerts={() => setActiveTab('anomalies')} />}
 
         {/* Layer 1: Usage & Telemetry Analytics */}
         {activeTab === 'analytics' && (
