@@ -157,8 +157,9 @@ export type NotificationChannel = 'Email' | 'SMS' | 'In-Cab Console Alert';
 
 export interface NotificationDispatch {
   channel: NotificationChannel;
+  role?: 'Manager' | 'Site Supervisor' | 'Customer / Operator' | 'Operator';
   recipient: string;
-  status: 'Sent' | 'Delivered';
+  status: 'Sent' | 'Delivered' | 'Simulated' | 'Failed';
   detail: string;
 }
 

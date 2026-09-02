@@ -193,7 +193,10 @@ export const AnomalyAlertsPanel: React.FC<AnomalyAlertsPanelProps> = ({
                             <div key={idx} className="flex items-start gap-2 text-[11px] text-neutral-700">
                               <ChannelIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
                               <span>
-                                <strong>{n.channel}</strong> → {n.recipient}
+                                <strong>{n.channel}</strong>{n.role ? ` → ${n.role}` : ''} ({n.recipient})
+                                <span className={`ml-1 font-semibold ${n.status === 'Sent' ? 'text-emerald-600' : n.status === 'Failed' ? 'text-rose-600' : 'text-neutral-400'}`}>
+                                  [{n.status}]
+                                </span>
                                 <span className="text-neutral-500"> — {n.detail}</span>
                               </span>
                             </div>

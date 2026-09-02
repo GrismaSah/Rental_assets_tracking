@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -53,7 +53,30 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
   sites,
   onFocusAsset,
 }) => {
-  const [timeRange, setTimeRange] = useState<'7d' | '30d'>('7d');
+  // Real historical telemetry, fetched from the actual telemetry_readings
+  // table (server.ts GET /api/telemetry/fleet-history) -- not fabricated.
+  // This replaces what used to be a flat repeated-value "trend" line.
+  interface HistoryBucket { label: string; timestamp: string; avg_idle_pct: number; avg_fuel_pct: number; reading_count: number }
+  const [historyBuckets, setHistoryBuckets] = useState<HistoryBucket[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchHistory = () => {
+      fetch('/api/telemetry/fleet-history')
+        .then((res) => res.json())
+        .then((data) => {
+          if (!cancelled && data.success) {
+            setHistoryBuckets(data.buckets || []);
+            setHistoryLoaded(true);
+          }
+        })
+        .catch(() => { if (!cancelled) setHistoryLoaded(true); });
+    };
+    fetchHistory();
+    const timer = window.setInterval(fetchHistory, 15000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, []);
 
   // Compute Aggregate Telemetry Metrics
   const totalEngineHoursDay = assets.reduce((acc, a) => acc + a.engine_hours_day, 0);
@@ -204,89 +227,52 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
     },
   };
 
-  // 1. Line Chart Data: Fuel Burn by Equipment Family (Liters / Hour)
-  // Derived from each asset's own live fuel_burn_rate_lph, grouped by
-  // family, so the chart tracks real telemetry instead of invented series.
-  // There's no historical time-series storage yet, so every point on the
-  // x-axis (day/week) repeats today's real fleet average for that family --
-  // an honest flat baseline rather than a fabricated trend.
-  const daysLabels = timeRange === '7d'
-    ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-    : ['Wk 1', 'Wk 2', 'Wk 3', 'Wk 4'];
-  const pointCount = daysLabels.length;
-
-  const avgBurnFor = (types: string[]) => {
-    const matches = assets.filter((a) => types.includes(a.type));
-    if (matches.length === 0) return 0;
-    return Number((matches.reduce((acc, a) => acc + a.fuel_burn_rate_lph, 0) / matches.length).toFixed(1));
-  };
-  const bulldozerAvgBurn = avgBurnFor(['Bulldozer']);
-  const excavatorAvgBurn = avgBurnFor(['Excavator']);
-  const graderCraneAvgBurn = avgBurnFor(['Grader', 'Crane']);
-  const fleetEcoTargetBurn = Number((Object.values(BUSINESS_RULES.fuelBurnCeilingLph).reduce((a, b) => a + b, 0) / Object.keys(BUSINESS_RULES.fuelBurnCeilingLph).length).toFixed(0));
-
-  const fuelBurnLineData = {
-    labels: daysLabels,
+  // 1. Line Chart Data: Live Telemetry History (Idle % & Fuel Level)
+  // Pulled straight from the telemetry_readings table (real historical
+  // rows persisted every ~5s by the telemetry simulator / QR tracking
+  // sessions -- see GET /api/telemetry/fleet-history in server.ts), bucketed
+  // by hour. This is genuine database history, not a fabricated trend --
+  // it will be sparse right after a fresh install and fill in over time.
+  const historyLineData = {
+    labels: historyBuckets.map((b) => b.label),
     datasets: [
       {
-        label: 'Cat Bulldozers (D6T/D8T)',
-        data: Array(pointCount).fill(bulldozerAvgBurn),
-        borderColor: '#FFCD00',
-        backgroundColor: 'rgba(255, 205, 0, 0.12)',
-        tension: 0.35,
+        label: 'Fleet Idle % (avg, hourly)',
+        data: historyBuckets.map((b) => b.avg_idle_pct),
+        borderColor: '#F59E0B',
+        backgroundColor: 'rgba(245, 158, 11, 0.12)',
+        tension: 0.3,
         fill: true,
-        pointBackgroundColor: '#FFCD00',
-        pointRadius: 4,
-      },
-      {
-        label: 'Cat Excavators (320/349)',
-        data: Array(pointCount).fill(excavatorAvgBurn),
-        borderColor: '#1D1D1F',
-        backgroundColor: 'rgba(29, 29, 31, 0.05)',
-        tension: 0.35,
-        fill: true,
-        pointBackgroundColor: '#1D1D1F',
-        pointRadius: 4,
-      },
-      {
-        label: 'Cat Graders & Cranes',
-        data: Array(pointCount).fill(graderCraneAvgBurn),
-        borderColor: '#10B981',
-        borderDash: [5, 5],
-        tension: 0.35,
         pointRadius: 3,
+        yAxisID: 'y',
       },
       {
-        label: 'Cat Eco-Mode Target (Max)',
-        data: Array(pointCount).fill(fleetEcoTargetBurn),
-        borderColor: '#94A3B8',
-        borderDash: [3, 3],
-        pointRadius: 0,
-      }
+        label: 'Fleet Avg Fuel Level %',
+        data: historyBuckets.map((b) => b.avg_fuel_pct),
+        borderColor: '#10B981',
+        backgroundColor: 'rgba(16, 185, 129, 0.08)',
+        tension: 0.3,
+        pointRadius: 3,
+        yAxisID: 'y',
+      },
     ],
   };
 
-  const fuelLineOptions: any = {
+  const historyLineOptions: any = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
       legend: {
         position: 'top' as const,
-        labels: {
-          boxWidth: 12,
-          font: { family: 'inherit', size: 11, weight: '500' },
-          color: '#475569',
-        },
+        labels: { boxWidth: 12, font: { family: 'inherit', size: 11, weight: '500' }, color: '#475569' },
       },
-      tooltip: {
-        backgroundColor: 'rgba(15, 23, 42, 0.9)',
-        padding: 10,
-        cornerRadius: 8,
-      },
+      tooltip: { backgroundColor: 'rgba(15, 23, 42, 0.9)', padding: 10, cornerRadius: 8 },
     },
     scales: {
       y: {
-        title: { display: true, text: 'Fuel Burn (Liters / Hour)', font: { size: 11 } },
+        min: 0,
+        max: 100,
+        title: { display: true, text: '%', font: { size: 11 } },
         grid: { color: 'rgba(0, 0, 0, 0.04)' },
         ticks: { color: '#64748B', font: { size: 10 } },
       },
@@ -462,41 +448,33 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       {/* Main Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         
-        {/* 7-Day Fuel Burn Trend Line Chart */}
+        {/* Live Telemetry History Line Chart -- real DB-backed history */}
         <div className="lg:col-span-8 bg-white p-5 rounded-2xl border border-neutral-200/70 space-y-3">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-neutral-900">
-                Fuel Burn Velocity & Telemetry Trends
+                Live Telemetry History
               </h3>
               <p className="text-xs text-neutral-500">
-                Hourly diesel consumption (L/hr) by equipment family vs Eco target
+                Hourly average idle % and fuel level, computed from real persisted telemetry readings
               </p>
             </div>
+            <span className="px-2 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              {historyBuckets.reduce((sum, b) => sum + b.reading_count, 0)} readings on file
+            </span>
+          </div>
 
-            <div className="flex items-center gap-1 bg-neutral-100 p-1 rounded-xl text-xs">
-              <button
-                onClick={() => setTimeRange('7d')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                  timeRange === '7d' ? 'bg-white text-neutral-900 shadow-2xs font-semibold' : 'text-neutral-500'
-                }`}
-              >
-                7 Days
-              </button>
-              <button
-                onClick={() => setTimeRange('30d')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                  timeRange === '30d' ? 'bg-white text-neutral-900 shadow-2xs font-semibold' : 'text-neutral-500'
-                }`}
-              >
-                30 Days
-              </button>
+          {historyLoaded && historyBuckets.length < 2 ? (
+            <div className="h-[280px] w-full flex items-center justify-center text-center px-8">
+              <p className="text-xs text-neutral-400">
+                Building history — telemetry is recorded every ~5s per tracked unit. Check back shortly for a real multi-point trend.
+              </p>
             </div>
-          </div>
-
-          <div className="h-[280px] w-full pt-2">
-            <Line data={fuelBurnLineData} options={fuelLineOptions} />
-          </div>
+          ) : (
+            <div className="h-[280px] w-full pt-2">
+              <Line data={historyLineData} options={historyLineOptions} />
+            </div>
+          )}
         </div>
 
         {/* Runtime vs Idle Hours Doughnut Distribution */}

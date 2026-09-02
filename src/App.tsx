@@ -9,12 +9,26 @@ import { AlertHistoryPanel } from './components/AlertHistoryPanel';
 import { QrCodeModal } from './components/QrCodeModal';
 import { ExecutiveDashboard } from './components/ExecutiveDashboard';
 import { FleetMapView } from './components/FleetMapView';
-import { OptimizationPanel } from './components/OptimizationPanel';
-import { AiCopilot } from './components/AiCopilot';
+import { AiCopilotDrawer } from './components/AiCopilotDrawer';
 import { DemoControls } from './components/DemoControls';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
 import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem, Geofence, GeofenceEvent, OptimizationRecommendation } from './types';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
+
+// Friendly page names sent to the AI Copilot as context (see
+// POST /api/ai/chat's page_context field in server.ts) so its answers can
+// reference what's actually on screen, regardless of which page the
+// floating drawer was opened from.
+const PAGE_LABELS: Record<Tab, string> = {
+  map: 'Executive Dashboard',
+  fleetmap: 'Fleet Map',
+  checkinout: 'Equipment / Check-In & Check-Out',
+  analytics: 'Analytics',
+  'ai-forecasting': 'Demand Forecast',
+  inspection: 'Maintenance & Inspections',
+  anomalies: 'Alerts',
+  history: 'Audit History',
+};
 
 export default function App() {
   const [assets, setAssets] = useState<Asset[]>(INITIAL_ASSETS);
@@ -24,6 +38,7 @@ export default function App() {
   const [geofences, setGeofences] = useState<Geofence[]>([]);
   const [geofenceEvents, setGeofenceEvents] = useState<GeofenceEvent[]>([]);
   const [recommendations, setRecommendations] = useState<OptimizationRecommendation[]>([]);
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [copilotSeedQuestion, setCopilotSeedQuestion] = useState<string | null>(null);
   // Permanent audit trail: every alert ever raised, including ones whose
   // underlying condition has since cleared (asset returned, idle dropped,
@@ -250,22 +265,49 @@ export default function App() {
     setIsInspectionOpen(true);
   };
 
-  // Handler: a machine's QR tag was opened (via ?scan=<id> in the URL) --
-  // open the check-in/out form pre-filled for it, defaulting to whichever
-  // direction makes sense given its current status (Active units are coming
-  // back in, everything else is going out to a customer).
-  const handleQrScanSuccess = (asset: Asset) => {
+  // Real QR scan pipeline, shared by BOTH entry points:
+  //  1. A phone's own camera app opening the printed tag's URL (?scan=<id>)
+  //  2. The in-app camera scanner inside the Check-In/Out Hub (QrScanner.tsx)
+  // Both call this exact function -- it identifies the equipment, hits the
+  // real backend (POST /api/assets/:id/scan, persisted to SQLite,
+  // rental_events logged, live telemetry tracking started), and returns the
+  // freshly-synced asset so the caller can pre-fill its own UI.
+  const handleQrScanAsset = async (assetId: string): Promise<Asset | null> => {
+    const asset = assets.find((a) => a.id.toLowerCase() === assetId.toLowerCase());
+    if (!asset) {
+      showToast('Unrecognized QR Code', `"${assetId}" doesn't match any known machine.`, 'warning');
+      return null;
+    }
+    try {
+      const response = await fetch(`/api/assets/${asset.id}/scan`, { method: 'POST' });
+      if (!response.ok) throw new Error((await response.json()).error || 'QR scan could not be recorded');
+      await syncDashboard();
+      showToast('QR Scan Recorded', `${asset.id} matched. Live telemetry tracking has started.`);
+      return asset;
+    } catch (error: any) {
+      showToast('QR Scan Failed', error.message, 'warning');
+      return null;
+    }
+  };
+
+  // Entry point 1: a machine's QR tag was opened directly (via ?scan=<id> in
+  // the URL, e.g. a phone's stock camera app) -- open the check-in/out form
+  // pre-filled for it, defaulting to whichever direction makes sense given
+  // its current status (Active units are coming back in, everything else
+  // is going out to a customer).
+  const handleQrUrlEntry = async (asset: Asset) => {
     setCheckInOutSource('qr');
     setModalAsset(asset);
     setCheckInOutMode(asset.status === 'Active' ? 'checkin' : 'checkout');
     setIsCheckInOutOpen(true);
-    fetch(`/api/assets/${asset.id}/scan`, { method: 'POST' })
-      .then(async (response) => {
-        if (!response.ok) throw new Error((await response.json()).error || 'QR scan could not be recorded');
-        await syncDashboard();
-        showToast('QR Scan Recorded', `${asset.id} matched. Live telemetry tracking has started and the handover form is pre-filled.`);
-      })
-      .catch((error) => showToast('QR Scan Failed', error.message, 'warning'));
+    await handleQrScanAsset(asset.id);
+  };
+
+  // Entry point 2: the in-modal camera scanner (CheckInOutModal ->
+  // QrScanner.tsx) calls this directly through the onScanAsset prop.
+  const handleQrScanFromModal = async (assetId: string): Promise<Asset | null> => {
+    setCheckInOutSource('qr');
+    return handleQrScanAsset(assetId);
   };
 
   // Helper: Open the QR tag modal for a specific asset
@@ -285,7 +327,7 @@ export default function App() {
 
     const asset = assets.find((a) => a.id.toLowerCase() === scanId.toLowerCase());
     if (asset) {
-      handleQrScanSuccess(asset);
+      void handleQrUrlEntry(asset);
     } else {
       showToast('Unrecognized QR Tag', `"${scanId}" doesn't match any known machine.`, 'warning');
     }
@@ -317,39 +359,16 @@ export default function App() {
       .catch((error) => showToast('Notification Failed', error.message, 'warning'));
   };
 
-  // Handler: Accept / dismiss a Smart Fleet Optimization recommendation --
-  // acceptance performs a real state mutation on the backend (relocation,
-  // early return, or operator assignment), not just a UI status flip.
-  const handleAcceptRecommendation = async (id: string) => {
-    try {
-      const response = await fetch(`/api/optimization/recommendations/${id}/accept`, { method: 'POST' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to accept recommendation');
-      await syncDashboard();
-      showToast('Recommendation Applied', `${data.asset.id} updated and the change is now live on the map and dashboard.`);
-    } catch (error: any) {
-      showToast('Optimization Failed', error.message, 'warning');
-    }
-  };
-
-  const handleDismissRecommendation = async (id: string) => {
-    try {
-      const response = await fetch(`/api/optimization/recommendations/${id}/dismiss`, { method: 'POST' });
-      if (!response.ok) throw new Error((await response.json()).error || 'Failed to dismiss recommendation');
-      await syncDashboard();
-    } catch (error: any) {
-      showToast('Dismiss Failed', error.message, 'warning');
-    }
-  };
-
-  // Handler: the AI Copilot proposed a mutating action and the user clicked
-  // Confirm. Every proposal from the AI is required to carry a
-  // recommendation_id that already exists in the optimizer's output (see the
-  // system prompt in server.ts), so confirming here just reuses the same
-  // accept endpoint the Action Center uses -- no separate AI-only mutation path.
+  // Handler: the AI Copilot proposed a mutating action (relocate / return
+  // early / assign operator) and the user clicked Confirm in the chat.
+  // Every proposal from the AI is required to carry a recommendation_id that
+  // already exists in the optimizer's output (see the system prompt in
+  // server.ts) -- confirming here calls the SAME accept endpoint that would
+  // back a dedicated Action Center, it's just reached through chat instead
+  // of a standalone page. This performs a real backend mutation, not a UI-only flip.
   const handleConfirmAiAction = async (proposal: { type: string; asset_id: string; recommendation_id: string | null; summary: string }): Promise<{ ok: boolean; message: string }> => {
     if (!proposal.recommendation_id) {
-      return { ok: false, message: `I don't have a matching recommendation on file for ${proposal.asset_id} to execute safely. Try asking again, or review the AI Action Center tab.` };
+      return { ok: false, message: `I don't have a matching recommendation on file for ${proposal.asset_id} to execute safely. Try asking me for the top priorities again first.` };
     }
     try {
       const response = await fetch(`/api/optimization/recommendations/${proposal.recommendation_id}/accept`, { method: 'POST' });
@@ -362,11 +381,11 @@ export default function App() {
     }
   };
 
-  // Handler: "Ask AI" button on a map/detail drawer jumps to the Copilot tab
-  // pre-seeded with a question about that specific unit.
+  // Handler: "Ask AI" button on a map/detail drawer opens the floating
+  // Copilot drawer pre-seeded with a question about that specific unit.
   const handleAskAiAboutAsset = (asset: Asset) => {
     setCopilotSeedQuestion(`Tell me about ${asset.id} — its status, costs, and what I should do about it.`);
-    setActiveTab('copilot');
+    setIsCopilotOpen(true);
   };
 
   // Handler: Quick action from anomaly panel
@@ -401,6 +420,7 @@ export default function App() {
           void syncDashboard();
           showToast('Telemetry Synced', 'Refreshed live Caterpillar telematic sensor streams.');
         }}
+        onOpenCopilot={() => { setCopilotSeedQuestion(null); setIsCopilotOpen(true); }}
       />
 
       {/* Main Content Area */}
@@ -432,29 +452,6 @@ export default function App() {
             onInspect={(asset) => triggerInspectionForAsset(asset)}
             onShowQrCode={(asset) => triggerShowQrCode(asset)}
             onAskAi={handleAskAiAboutAsset}
-          />
-        )}
-
-        {/* Smart Fleet Optimization & Dispatch Engine */}
-        {activeTab === 'optimization' && (
-          <OptimizationPanel
-            recommendations={recommendations}
-            onAccept={handleAcceptRecommendation}
-            onDismiss={handleDismissRecommendation}
-            onViewAsset={(assetId) => {
-              const asset = assets.find((a) => a.id === assetId);
-              if (asset) setSelectedAsset(asset);
-              setActiveTab('fleetmap');
-            }}
-          />
-        )}
-
-        {/* SmartRent Copilot AI chat */}
-        {activeTab === 'copilot' && (
-          <AiCopilot
-            onConfirmAction={handleConfirmAiAction}
-            seedQuestion={copilotSeedQuestion}
-            onSeedConsumed={() => setCopilotSeedQuestion(null)}
           />
         )}
 
@@ -700,6 +697,7 @@ export default function App() {
         assets={assets}
         sites={sites}
         operators={operators}
+        onScanAsset={handleQrScanFromModal}
         onSubmitCheckOut={handleCheckOutSubmit}
         onSubmitCheckIn={handleCheckInSubmit}
       />
@@ -744,6 +742,27 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Floating SmartRent Copilot -- the SAME assistant/backend from every
+          page (see PAGE_LABELS above for how context is passed), instead of
+          a separate standalone tab. */}
+      {!isCopilotOpen && (
+        <button
+          onClick={() => { setCopilotSeedQuestion(null); setIsCopilotOpen(true); }}
+          className="fixed bottom-6 left-6 sm:left-[268px] z-50 w-12 h-12 rounded-2xl bg-neutral-900 text-[#FFCD00] shadow-lg hover:bg-neutral-800 transition-colors flex items-center justify-center"
+          title="Ask SmartRent Copilot"
+        >
+          <Sparkles className="w-5 h-5" />
+        </button>
+      )}
+      <AiCopilotDrawer
+        isOpen={isCopilotOpen}
+        onClose={() => setIsCopilotOpen(false)}
+        onConfirmAction={handleConfirmAiAction}
+        pageContext={PAGE_LABELS[activeTab] + (selectedAsset ? ` — asset ${selectedAsset.id} currently selected` : '')}
+        seedQuestion={copilotSeedQuestion}
+        onSeedConsumed={() => setCopilotSeedQuestion(null)}
+      />
 
     </div>
   );

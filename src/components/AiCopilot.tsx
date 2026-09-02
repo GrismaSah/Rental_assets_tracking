@@ -18,6 +18,9 @@ interface ChatMessage {
 
 interface AiCopilotProps {
   onConfirmAction: (proposal: ActionProposal) => Promise<{ ok: boolean; message: string }>;
+  /** Which page/section the user is currently on, sent to the backend so the
+   *  AI's answer can be grounded in what's actually on screen. */
+  pageContext?: string;
   seedQuestion?: string | null;
   onSeedConsumed?: () => void;
 }
@@ -40,7 +43,7 @@ function renderMarkdownLite(text: string) {
   return { __html: html };
 }
 
-export const AiCopilot: React.FC<AiCopilotProps> = ({ onConfirmAction, seedQuestion, onSeedConsumed }) => {
+export const AiCopilot: React.FC<AiCopilotProps> = ({ onConfirmAction, pageContext, seedQuestion, onSeedConsumed }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'assistant', content: "I'm SmartRent Copilot. Ask me about idle costs, overdue rentals, geofence violations, or fleet priorities — I only answer from live fleet data." },
   ]);
@@ -58,7 +61,11 @@ export const AiCopilot: React.FC<AiCopilotProps> = ({ onConfirmAction, seedQuest
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history: nextMessages.slice(-6).map((m) => ({ role: m.role, content: m.content })) }),
+        body: JSON.stringify({
+          message: text,
+          history: nextMessages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+          page_context: pageContext,
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'AI request failed');
@@ -93,7 +100,7 @@ export const AiCopilot: React.FC<AiCopilotProps> = ({ onConfirmAction, seedQuest
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-neutral-200/70 flex flex-col h-[640px]">
+    <div className="bg-white rounded-2xl border border-neutral-200/70 flex flex-col h-full">
       <div className="p-4 border-b border-neutral-100 flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-neutral-900 text-[#FFCD00] flex items-center justify-center">
           <Sparkles className="w-4.5 h-4.5" />

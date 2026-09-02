@@ -1,21 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ScanLine, 
-  X, 
-  QrCode, 
-  CreditCard, 
-  Check, 
-  Building2, 
-  User, 
-  Calendar, 
-  Fuel, 
-  Clock, 
+import {
+  ScanLine,
+  X,
+  QrCode,
+  Building2,
+  User,
+  Calendar,
+  Fuel,
+  Clock,
   Sparkles,
   ArrowRight,
   ShieldAlert
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Asset, Site, Operator } from '../types';
+import { QrScanner } from './QrScanner';
 
 interface CheckInOutModalProps {
   isOpen: boolean;
@@ -25,6 +24,9 @@ interface CheckInOutModalProps {
   assets: Asset[];
   sites: Site[];
   operators: Operator[];
+  // Performs the REAL backend QR scan (POST /api/assets/:id/scan) and
+  // returns the matched, freshly-synced asset -- or null if no match.
+  onScanAsset: (assetId: string) => Promise<Asset | null>;
   onSubmitCheckOut: (data: {
     asset_id: string;
     site_id: string;
@@ -51,12 +53,14 @@ export const CheckInOutModal: React.FC<CheckInOutModalProps> = ({
   assets,
   sites,
   operators,
+  onScanAsset,
   onSubmitCheckOut,
   onSubmitCheckIn,
 }) => {
   const [activeTab, setActiveTab] = useState<'checkout' | 'checkin'>(initialMode);
-  const [isScanning, setIsScanning] = useState(false);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
 
   // Form State
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
@@ -90,26 +94,33 @@ export const CheckInOutModal: React.FC<CheckInOutModalProps> = ({
 
   const currentAsset = assets.find((a) => a.id === selectedAssetId);
 
-  // Simulated RFID Scanner Trigger
-  const handleSimulateRfidScan = (assetIdToScan?: string) => {
-    setIsScanning(true);
-    setScanSuccess(false);
-
-    setTimeout(() => {
-      setIsScanning(false);
-      setScanSuccess(true);
-      const targetId = assetIdToScan || assets[Math.floor(Math.random() * assets.length)].id;
-      setSelectedAssetId(targetId);
-
-      confetti({
-        particleCount: 40,
-        spread: 60,
-        origin: { y: 0.6 },
-        colors: ['#FFCD00', '#10B981', '#1D1D1F'],
-      });
-
-      setTimeout(() => setScanSuccess(false), 2500);
-    }, 1200);
+  // Real QR scan handler: onScanAsset hits the actual backend
+  // (POST /api/assets/:id/scan), persists the scan event to SQLite, and
+  // returns the freshly-synced asset. This pre-fills the form from real
+  // equipment state and switches to the correct tab (Active units come
+  // back in, everything else goes out) -- no fabricated success state.
+  const handleQrDetected = async (assetId: string) => {
+    setScanError(null);
+    const asset = await onScanAsset(assetId);
+    setIsScannerOpen(false);
+    if (!asset) {
+      setScanError(`No equipment found matching "${assetId}".`);
+      return;
+    }
+    setSelectedAssetId(asset.id);
+    setSelectedSiteId(asset.site_id || sites[0]?.id || '');
+    setSelectedOperatorId(asset.operator_id || '');
+    setFuelPct(asset.fuel_level_pct);
+    setEngineHours(asset.lifetime_engine_hours);
+    setActiveTab(asset.status === 'Active' ? 'checkin' : 'checkout');
+    setScanSuccess(true);
+    confetti({
+      particleCount: 40,
+      spread: 60,
+      origin: { y: 0.6 },
+      colors: ['#FFCD00', '#10B981', '#1D1D1F'],
+    });
+    setTimeout(() => setScanSuccess(false), 2500);
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -158,7 +169,7 @@ export const CheckInOutModal: React.FC<CheckInOutModalProps> = ({
                 Caterpillar Asset Check-In / Check-Out Hub
               </h2>
               <p className="text-xs text-neutral-500">
-                RFID telematics badge scanner & digital equipment handover
+                QR code scan & digital equipment handover
               </p>
             </div>
           </div>
@@ -196,23 +207,26 @@ export const CheckInOutModal: React.FC<CheckInOutModalProps> = ({
             </button>
           </div>
 
-          {/* Simulate RFID Button */}
+          {/* Real camera QR scanner trigger */}
           <button
             type="button"
-            onClick={() => handleSimulateRfidScan()}
-            disabled={isScanning}
+            onClick={() => { setScanError(null); setIsScannerOpen(true); }}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-              isScanning
-                ? 'bg-amber-50 border-amber-300 text-amber-800 animate-pulse'
-                : scanSuccess
+              scanSuccess
                 ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
                 : 'bg-white border-neutral-200 text-neutral-800 hover:bg-neutral-50'
             }`}
           >
-            <CreditCard className="w-4 h-4 text-[#FFCD00]" />
-            <span>{isScanning ? 'Scanning Cat RFID Tag...' : scanSuccess ? '✓ RFID Badge Verified' : 'Tap Cat RFID Card'}</span>
+            <QrCode className="w-4 h-4 text-[#FFCD00]" />
+            <span>{scanSuccess ? '✓ Equipment Matched' : 'Scan QR Code'}</span>
           </button>
         </div>
+
+        {scanError && (
+          <div className="mx-5 mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] text-rose-700">
+            {scanError}
+          </div>
+        )}
 
         {/* Form Body */}
         <form onSubmit={handleFormSubmit} className="p-5 overflow-y-auto space-y-4 flex-1">
@@ -482,6 +496,10 @@ export const CheckInOutModal: React.FC<CheckInOutModalProps> = ({
         </form>
 
       </div>
+
+      {isScannerOpen && (
+        <QrScanner onDetect={handleQrDetected} onClose={() => setIsScannerOpen(false)} />
+      )}
     </div>
   );
 };

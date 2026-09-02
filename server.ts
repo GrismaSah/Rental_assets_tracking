@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import { DatabaseSync } from 'node:sqlite';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './src/data/initialAssets.ts';
@@ -333,20 +334,95 @@ async function sendSms(to: string, body: string) {
   return { status: 'Sent', detail: `Twilio message ${payload.sid} accepted for delivery.` };
 }
 
+let cachedSmtpTransport: nodemailer.Transporter | null | undefined;
+
+function getSmtpTransport(): nodemailer.Transporter | null {
+  if (cachedSmtpTransport !== undefined) return cachedSmtpTransport;
+  const host = process.env.SMTP_HOST;
+  const port = process.env.SMTP_PORT;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !port || !user || !pass) {
+    cachedSmtpTransport = null;
+    return null;
+  }
+  cachedSmtpTransport = nodemailer.createTransport({
+    host,
+    port: Number(port),
+    secure: Number(port) === 465,
+    auth: { user, pass },
+  });
+  return cachedSmtpTransport;
+}
+
+// Mirrors sendSms()'s real-if-configured / simulated-otherwise contract, so
+// email and SMS behave identically instead of email being unconditionally
+// fake. Configure SMTP_HOST/PORT/USER/PASS to actually deliver mail.
+async function sendEmail(to: string, subject: string, body: string) {
+  const transport = getSmtpTransport();
+  if (!transport) {
+    return { status: 'Simulated' as const, detail: 'Add SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS to send this email for real.' };
+  }
+  const from = process.env.SMTP_FROM || process.env.SMTP_USER;
+  const info = await transport.sendMail({ from, to, subject, text: body });
+  return { status: 'Sent' as const, detail: `Email ${info.messageId} accepted for delivery to ${to}.` };
+}
+
+// Every alert has up to three distinct real-world recipients -- distinct
+// contact records pulled from actual asset/site/operator data, not a single
+// blurred "notify someone" call:
+//  - Manager: fleet-wide, from ALERT_MANAGER_PHONE/EMAIL env config (no
+//    single "manager" entity exists in the data model, so this is
+//    operator-configured, same as a real ops team would set up).
+//  - Site Supervisor: per-site contact from SITES (site.supervisor_*).
+//  - Customer / Operator: whoever currently has the unit checked out
+//    (OPERATORS[].contact) -- this app models the person operating the
+//    rented equipment, which doubles as "the customer" for this rental.
+function resolveAlertRecipients(asset: any) {
+  const site = SITES.find((s) => s.id === asset?.site_id);
+  const operator = OPERATORS.find((o) => o.id === asset?.operator_id);
+  const recipients: { role: 'Manager' | 'Site Supervisor' | 'Customer / Operator'; phone?: string; email?: string }[] = [];
+  const managerPhone = process.env.ALERT_MANAGER_PHONE;
+  const managerEmail = process.env.ALERT_MANAGER_EMAIL;
+  if (managerPhone || managerEmail) recipients.push({ role: 'Manager', phone: managerPhone, email: managerEmail });
+  if (site) recipients.push({ role: 'Site Supervisor', phone: site.supervisor_phone, email: site.supervisor_email });
+  if (operator) recipients.push({ role: 'Customer / Operator', phone: process.env.ALERT_CUSTOMER_PHONE || operator.contact });
+  return recipients;
+}
+
+async function dispatchAlertNotifications(alert: any, asset: any) {
+  const message = `Fleet alert ${alert.asset_id}: ${alert.type}. ${alert.recommendation}`;
+  const recipients = resolveAlertRecipients(asset);
+  const notifications = (await Promise.all(recipients.flatMap((r) => {
+    const tasks: Promise<any>[] = [];
+    if (r.phone) {
+      tasks.push(sendSms(r.phone, message)
+        .then((result) => ({ channel: 'SMS', role: r.role, recipient: r.phone, ...result }))
+        .catch((error: any) => ({ channel: 'SMS', role: r.role, recipient: r.phone, status: 'Failed', detail: error.message || 'SMS delivery failed.' })));
+    }
+    if (r.email) {
+      tasks.push(sendEmail(r.email, `Fleet Alert: ${alert.type} on ${alert.asset_id}`, `${message}\n\nAsset: ${alert.asset_id}\nSeverity: ${alert.severity}\nDescription: ${alert.description}`)
+        .then((result) => ({ channel: 'Email', role: r.role, recipient: r.email, ...result }))
+        .catch((error: any) => ({ channel: 'Email', role: r.role, recipient: r.email, status: 'Failed', detail: error.message || 'Email delivery failed.' })));
+    }
+    return tasks;
+  }))) as any[];
+  notifications.push({
+    channel: 'In-Cab Console Alert',
+    role: 'Operator',
+    recipient: asset ? `${asset.id} on-board display` : 'Unit display',
+    status: 'Simulated',
+    detail: 'No real in-cab telematics hardware is connected in this demo; a production deployment would push this over Cat Product Link / VisionLink.',
+  });
+  return notifications;
+}
+
 async function sendAutomaticAlertNotification(alertId: string) {
   const row = db.prepare('SELECT data FROM alerts WHERE id = ?').get(alertId) as { data: string } | undefined;
   if (!row) return;
   const alert = JSON.parse(row.data);
   const asset = fleetAssets.find((item) => item.id === alert.asset_id);
-  const site = SITES.find((item) => item.id === asset?.site_id);
-  const operator = OPERATORS.find((item) => item.id === asset?.operator_id);
-  const recipients = [process.env.ALERT_MANAGER_PHONE || site?.supervisor_phone, process.env.ALERT_CUSTOMER_PHONE || operator?.contact]
-    .filter((phone): phone is string => Boolean(phone));
-  const message = `Fleet alert ${alert.asset_id}: ${alert.type}. ${alert.recommendation}`;
-  const notifications = await Promise.all(recipients.map(async (recipient) => {
-    try { return { channel: 'SMS', recipient, ...(await sendSms(recipient, message)) }; }
-    catch (error: any) { return { channel: 'SMS', recipient, status: 'Failed', detail: error.message || 'SMS delivery failed.' }; }
-  }));
+  const notifications = await dispatchAlertNotifications(alert, asset);
   const latest = db.prepare('SELECT data FROM alerts WHERE id = ?').get(alertId) as { data: string } | undefined;
   if (!latest) return;
   db.prepare('UPDATE alerts SET data = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(latest.data), notifications, notified_at: new Date().toISOString() }), alertId);
@@ -498,28 +574,7 @@ app.post('/api/alerts/:id/notify', async (req, res) => {
   if (!row) return res.status(404).json({ error: 'Alert not found' });
   const alert = JSON.parse(row.data);
   const asset = fleetAssets.find((item) => item.id === alert.asset_id);
-  const site = SITES.find((item) => item.id === asset?.site_id);
-  const operator = OPERATORS.find((item) => item.id === asset?.operator_id);
-  const message = `Fleet alert ${alert.asset_id}: ${alert.type}. ${alert.recommendation}`;
-  const managerPhone = process.env.ALERT_MANAGER_PHONE || site?.supervisor_phone;
-  const customerPhone = process.env.ALERT_CUSTOMER_PHONE || operator?.contact;
-  const smsRecipients = [
-    { label: 'Manager SMS', recipient: managerPhone },
-    { label: 'Customer / Operator SMS', recipient: customerPhone },
-  ].filter((entry): entry is { label: string; recipient: string } => Boolean(entry.recipient));
-  const smsNotifications = await Promise.all(smsRecipients.map(async ({ label, recipient }) => {
-    try {
-      const result = await sendSms(recipient, message);
-      return { channel: 'SMS', recipient: `${label}: ${recipient}`, ...result };
-    } catch (error: any) {
-      return { channel: 'SMS', recipient: `${label}: ${recipient}`, status: 'Failed', detail: error.message || 'SMS delivery failed.' };
-    }
-  }));
-  const notifications = [
-    ...(site ? [{ channel: 'Email', recipient: `${site.supervisor} <${site.supervisor_email}>`, status: 'Simulated', detail: 'Demo email notification recorded.' }] : []),
-    ...smsNotifications,
-    { channel: 'In-Cab Console Alert', recipient: asset ? `${asset.id} on-board display` : 'Unit display', status: 'Simulated', detail: 'Demo in-cab alert recorded.' },
-  ];
+  const notifications = await dispatchAlertNotifications(alert, asset);
   const data = { ...alert, notifications, notified_at: new Date().toISOString() };
   db.prepare('UPDATE alerts SET data = ? WHERE id = ?').run(JSON.stringify(data), req.params.id);
   res.json({ success: true, alert: data });
@@ -616,6 +671,39 @@ app.get('/api/sites/:id/usage', (req, res) => {
       utilization_pct: Math.round((totalEngine / Math.max(totalEngine + totalIdle, 1)) * 100),
     },
   });
+});
+
+// Real historical trend for the Analytics screen, computed from actual
+// persisted telemetry_readings rows (not a fabricated series). Buckets by
+// hour so the chart is meaningful within a single demo session; returns
+// whatever real history actually exists, which may be sparse right after
+// a fresh install -- that's shown honestly rather than backfilled with
+// invented data.
+app.get('/api/telemetry/fleet-history', (req, res) => {
+  const rows = db.prepare('SELECT timestamp, engine_hours_day, idle_hours_day, fuel_level_pct FROM telemetry_readings ORDER BY timestamp ASC').all() as {
+    timestamp: string; engine_hours_day: number; idle_hours_day: number; fuel_level_pct: number;
+  }[];
+  const buckets = new Map<string, { engine: number; idle: number; fuel: number; count: number }>();
+  for (const row of rows) {
+    const bucketKey = row.timestamp.slice(0, 13); // YYYY-MM-DDTHH
+    const bucket = buckets.get(bucketKey) || { engine: 0, idle: 0, fuel: 0, count: 0 };
+    bucket.engine += row.engine_hours_day;
+    bucket.idle += row.idle_hours_day;
+    bucket.fuel += row.fuel_level_pct;
+    bucket.count += 1;
+    buckets.set(bucketKey, bucket);
+  }
+  const series = [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-24)
+    .map(([key, b]) => ({
+      label: `${key.slice(11, 13)}:00`,
+      timestamp: key,
+      avg_idle_pct: Math.round((b.idle / Math.max(b.engine + b.idle, 0.1)) * 100),
+      avg_fuel_pct: Math.round(b.fuel / b.count),
+      reading_count: b.count,
+    }));
+  res.json({ success: true, buckets: series, total_readings: rows.length });
 });
 
 app.get('/api/telemetry/summary', (req, res) => {
@@ -1106,7 +1194,7 @@ function ruleBasedAiFallback(message: string, context: ReturnType<typeof buildFl
 }
 
 app.post('/api/ai/chat', async (req, res) => {
-  const { message, history = [] } = req.body;
+  const { message, history = [], page_context } = req.body;
   if (!message || typeof message !== 'string') return res.status(400).json({ error: 'message is required' });
 
   const context = buildFleetContext({
@@ -1127,7 +1215,10 @@ app.post('/api/ai/chat', async (req, res) => {
     const historyText = Array.isArray(history) && history.length
       ? `\n\nRecent conversation:\n${history.slice(-6).map((h: any) => `${h.role}: ${h.content}`).join('\n')}`
       : '';
-    const prompt = `Fleet context (JSON):\n${JSON.stringify(context)}${historyText}\n\nUser question: ${message}`;
+    const pageContextText = page_context && typeof page_context === 'string'
+      ? `\n\nThe user is currently looking at: ${page_context}. Prefer that context when it's relevant to their question.`
+      : '';
+    const prompt = `Fleet context (JSON):\n${JSON.stringify(context)}${pageContextText}${historyText}\n\nUser question: ${message}`;
     const result = await provider.generateJSON<{ answer: string; action_proposal: any }>(prompt, {
       systemInstruction: AI_SYSTEM_INSTRUCTION,
       temperature: 0.2,
