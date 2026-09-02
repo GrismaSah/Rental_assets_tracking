@@ -33,6 +33,28 @@ export const BUSINESS_RULES = {
     'Wheel Loader': 17,
     Compactor: 11,
   } as Record<string, number>,
+
+  // ---- Geofencing ----
+  /** Default radius applied to a site's geofence when one hasn't been configured yet. */
+  defaultGeofenceRadiusMeters: 2000,
+  /** Distance beyond the radius, as a fraction of the radius, that counts as
+   *  "near boundary" rather than fully inside (e.g. 0.85 = last 15% of the radius). */
+  nearBoundaryRatio: 0.85,
+  /** Distance past the radius (meters) at which an OUTSIDE violation escalates
+   *  from WARNING to CRITICAL. */
+  geofenceCriticalOverageMeters: 1500,
+
+  // ---- Financial intelligence (all configurable; used for transparent, deterministic math) ----
+  financial: {
+    /** Fallback fuel cost when an asset-specific rate isn't known, $/liter. */
+    fuelCostPerLiter: 1.35,
+    /** Fully-loaded cost of an idle hour beyond wear/fuel (yard space, opportunity cost), $/hr. */
+    idleOverheadPerHour: 22,
+    /** Flat cost estimate to physically relocate/transport a unit between sites. */
+    transportCostFlat: 650,
+    /** Estimated labor cost per hour for a certified operator. */
+    laborCostPerHour: 65,
+  },
 } as const;
 
 export const BUSINESS_RULES_VERSION = '2025-04-brief-v2';

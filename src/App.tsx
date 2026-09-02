@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Header } from './components/Header';
+import { Header, Tab } from './components/Header';
 import { TelemetryAnalytics } from './components/TelemetryAnalytics';
 import { CheckInOutModal } from './components/CheckInOutModal';
 import { InspectionModal } from './components/InspectionModal';
@@ -8,8 +8,12 @@ import { AnomalyAlertsPanel } from './components/AnomalyAlertsPanel';
 import { AlertHistoryPanel } from './components/AlertHistoryPanel';
 import { QrCodeModal } from './components/QrCodeModal';
 import { ExecutiveDashboard } from './components/ExecutiveDashboard';
+import { FleetMapView } from './components/FleetMapView';
+import { OptimizationPanel } from './components/OptimizationPanel';
+import { AiCopilot } from './components/AiCopilot';
+import { DemoControls } from './components/DemoControls';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
-import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem } from './types';
+import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem, Geofence, GeofenceEvent, OptimizationRecommendation } from './types';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -17,13 +21,17 @@ export default function App() {
   const [sites, setSites] = useState<Site[]>(SITES);
   const [operators, setOperators] = useState<Operator[]>(OPERATORS);
   const [alerts, setAlerts] = useState<AnomalyAlert[]>([]);
+  const [geofences, setGeofences] = useState<Geofence[]>([]);
+  const [geofenceEvents, setGeofenceEvents] = useState<GeofenceEvent[]>([]);
+  const [recommendations, setRecommendations] = useState<OptimizationRecommendation[]>([]);
+  const [copilotSeedQuestion, setCopilotSeedQuestion] = useState<string | null>(null);
   // Permanent audit trail: every alert ever raised, including ones whose
   // underlying condition has since cleared (asset returned, idle dropped,
   // etc). `alerts` above only ever reflects what's true right now.
   const [alertHistory, setAlertHistory] = useState<AlertHistoryEntry[]>([]);
 
   // Navigation tab state
-  const [activeTab, setActiveTab] = useState<'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies' | 'history'>('map');
+  const [activeTab, setActiveTab] = useState<Tab>('map');
 
   // Selected asset state for drawer/map
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
@@ -56,17 +64,29 @@ export default function App() {
   // for Server-Sent Events when a production telemetry provider is connected.
   const syncDashboard = useCallback(async () => {
     try {
-      const [dashboardResponse, historyResponse] = await Promise.all([
+      const [dashboardResponse, historyResponse, geofenceResponse, geofenceEventsResponse, recommendationsResponse] = await Promise.all([
         fetch('/api/dashboard'),
         fetch('/api/alerts?history=true'),
+        fetch('/api/geofences'),
+        fetch('/api/geofence-events'),
+        fetch('/api/optimization/recommendations'),
       ]);
       if (!dashboardResponse.ok || !historyResponse.ok) throw new Error('Fleet API is unavailable');
-      const [dashboard, history] = await Promise.all([dashboardResponse.json(), historyResponse.json()]);
+      const [dashboard, history, geofenceData, geofenceEventsData, recommendationsData] = await Promise.all([
+        dashboardResponse.json(),
+        historyResponse.json(),
+        geofenceResponse.json(),
+        geofenceEventsResponse.json(),
+        recommendationsResponse.json(),
+      ]);
       if (dashboard.success && dashboard.assets) {
         setAssets(dashboard.assets);
         setAlerts(dashboard.alerts || []);
       }
       if (history.success) setAlertHistory(history.alerts || []);
+      if (geofenceData.success) setGeofences(geofenceData.geofences || []);
+      if (geofenceEventsData.success) setGeofenceEvents(geofenceEventsData.events || []);
+      if (recommendationsData.success) setRecommendations(recommendationsData.recommendations || []);
     } catch (err) {
       console.warn('Fleet API sync failed; retaining the last visible fleet snapshot.', err);
     }
@@ -297,6 +317,58 @@ export default function App() {
       .catch((error) => showToast('Notification Failed', error.message, 'warning'));
   };
 
+  // Handler: Accept / dismiss a Smart Fleet Optimization recommendation --
+  // acceptance performs a real state mutation on the backend (relocation,
+  // early return, or operator assignment), not just a UI status flip.
+  const handleAcceptRecommendation = async (id: string) => {
+    try {
+      const response = await fetch(`/api/optimization/recommendations/${id}/accept`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to accept recommendation');
+      await syncDashboard();
+      showToast('Recommendation Applied', `${data.asset.id} updated and the change is now live on the map and dashboard.`);
+    } catch (error: any) {
+      showToast('Optimization Failed', error.message, 'warning');
+    }
+  };
+
+  const handleDismissRecommendation = async (id: string) => {
+    try {
+      const response = await fetch(`/api/optimization/recommendations/${id}/dismiss`, { method: 'POST' });
+      if (!response.ok) throw new Error((await response.json()).error || 'Failed to dismiss recommendation');
+      await syncDashboard();
+    } catch (error: any) {
+      showToast('Dismiss Failed', error.message, 'warning');
+    }
+  };
+
+  // Handler: the AI Copilot proposed a mutating action and the user clicked
+  // Confirm. Every proposal from the AI is required to carry a
+  // recommendation_id that already exists in the optimizer's output (see the
+  // system prompt in server.ts), so confirming here just reuses the same
+  // accept endpoint the Action Center uses -- no separate AI-only mutation path.
+  const handleConfirmAiAction = async (proposal: { type: string; asset_id: string; recommendation_id: string | null; summary: string }): Promise<{ ok: boolean; message: string }> => {
+    if (!proposal.recommendation_id) {
+      return { ok: false, message: `I don't have a matching recommendation on file for ${proposal.asset_id} to execute safely. Try asking again, or review the AI Action Center tab.` };
+    }
+    try {
+      const response = await fetch(`/api/optimization/recommendations/${proposal.recommendation_id}/accept`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Action failed');
+      await syncDashboard();
+      return { ok: true, message: `Done — ${data.asset.id} has been updated.` };
+    } catch (error: any) {
+      return { ok: false, message: `That action failed: ${error.message}` };
+    }
+  };
+
+  // Handler: "Ask AI" button on a map/detail drawer jumps to the Copilot tab
+  // pre-seeded with a question about that specific unit.
+  const handleAskAiAboutAsset = (asset: Asset) => {
+    setCopilotSeedQuestion(`Tell me about ${asset.id} — its status, costs, and what I should do about it.`);
+    setActiveTab('copilot');
+  };
+
   // Handler: Quick action from anomaly panel
   const handleAnomalyAction = (asset: Asset, actionType: 'checkout' | 'checkin' | 'inspect') => {
     if (actionType === 'inspect') {
@@ -335,7 +407,56 @@ export default function App() {
       <main className="mx-auto w-full max-w-[1660px] space-y-6 p-4 sm:p-8 lg:p-10 animate-fadeIn">
         
         {/* Layer 3: Executive Fleet Map View */}
-        {activeTab === 'map' && <ExecutiveDashboard assets={assets} sites={sites} alerts={alerts} onSelectAsset={(asset) => { setSelectedAsset(asset); setActiveTab('checkinout'); }} onOpenAlerts={() => setActiveTab('anomalies')} />}
+        {activeTab === 'map' && (
+          <ExecutiveDashboard
+            assets={assets}
+            sites={sites}
+            alerts={alerts}
+            geofenceEvents={geofenceEvents}
+            recommendations={recommendations}
+            onSelectAsset={(asset) => { setSelectedAsset(asset); setActiveTab('fleetmap'); }}
+            onOpenAlerts={() => setActiveTab('anomalies')}
+          />
+        )}
+
+        {/* Live Fleet Map: geofence boundaries, violations, per-asset drawer */}
+        {activeTab === 'fleetmap' && (
+          <FleetMapView
+            assets={assets}
+            sites={sites}
+            geofences={geofences}
+            geofenceEvents={geofenceEvents}
+            selectedAsset={selectedAsset}
+            onSelectAsset={setSelectedAsset}
+            onCheckInOut={(asset, mode) => triggerCheckInOutForAsset(asset, mode)}
+            onInspect={(asset) => triggerInspectionForAsset(asset)}
+            onShowQrCode={(asset) => triggerShowQrCode(asset)}
+            onAskAi={handleAskAiAboutAsset}
+          />
+        )}
+
+        {/* Smart Fleet Optimization & Dispatch Engine */}
+        {activeTab === 'optimization' && (
+          <OptimizationPanel
+            recommendations={recommendations}
+            onAccept={handleAcceptRecommendation}
+            onDismiss={handleDismissRecommendation}
+            onViewAsset={(assetId) => {
+              const asset = assets.find((a) => a.id === assetId);
+              if (asset) setSelectedAsset(asset);
+              setActiveTab('fleetmap');
+            }}
+          />
+        )}
+
+        {/* SmartRent Copilot AI chat */}
+        {activeTab === 'copilot' && (
+          <AiCopilot
+            onConfirmAction={handleConfirmAiAction}
+            seedQuestion={copilotSeedQuestion}
+            onSeedConsumed={() => setCopilotSeedQuestion(null)}
+          />
+        )}
 
         {/* Layer 1: Usage & Telemetry Analytics */}
         {activeTab === 'analytics' && (
@@ -551,13 +672,16 @@ export default function App() {
 
         {/* Layer 2: Rules & Anomaly Alerts */}
         {activeTab === 'anomalies' && (
-          <AnomalyAlertsPanel
-            alerts={alerts}
-            assets={assets}
-            onResolveAlert={handleResolveAlert}
-            onTakeAction={handleAnomalyAction}
-            onNotify={handleNotifyAlert}
-          />
+          <div className="space-y-4">
+            <DemoControls assets={assets} onTriggered={(message) => { void syncDashboard(); showToast('Demo Scenario Triggered', message); }} />
+            <AnomalyAlertsPanel
+              alerts={alerts}
+              assets={assets}
+              onResolveAlert={handleResolveAlert}
+              onTakeAction={handleAnomalyAction}
+              onNotify={handleNotifyAlert}
+            />
+          </div>
         )}
 
         {/* Layer 2: Alert & Notification Audit Trail */}

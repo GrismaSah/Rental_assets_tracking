@@ -2,6 +2,8 @@ export type AssetStatus = 'Active' | 'Idle' | 'Under Maintenance' | 'Pending Che
 
 export type EquipmentType = 'Excavator' | 'Crane' | 'Bulldozer' | 'Grader' | 'Wheel Loader' | 'Compactor';
 
+export type GeofenceStatus = 'INSIDE' | 'NEAR_BOUNDARY' | 'OUTSIDE' | 'UNKNOWN';
+
 export interface Asset {
   id: string;
   type: EquipmentType;
@@ -28,6 +30,62 @@ export interface Asset {
   /** Cumulative engine meter reading, carried across rentals. Updated from
    *  the operator-entered odometer value at each check-in. */
   lifetime_engine_hours: number;
+  /** Server-computed distance from the assigned site's geofence center, in meters. */
+  geofence_distance_m?: number;
+  geofence_status?: GeofenceStatus;
+  tracking_enabled?: boolean;
+  tracking_status?: string;
+  last_telemetry_at?: string | null;
+}
+
+export interface Geofence {
+  id: string;
+  site_id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GeofenceEvent {
+  id: number;
+  asset_id: string;
+  geofence_id: string;
+  site_id: string;
+  status: GeofenceStatus;
+  distance_m: number;
+  severity: 'WARNING' | 'CRITICAL';
+  violation_started_at: string;
+  last_seen_at: string;
+  violation_count: number;
+  resolved_at: string | null;
+}
+
+export type OptimizationType = 'RELOCATE_ASSET' | 'RETURN_EARLY' | 'ASSIGN_OPERATOR';
+export type OptimizationPriority = 'HIGH' | 'MEDIUM' | 'LOW';
+export type OptimizationDecision = 'PENDING' | 'ACCEPTED' | 'DISMISSED';
+
+export interface OptimizationRecommendation {
+  id: string;
+  type: OptimizationType;
+  priority: OptimizationPriority;
+  asset_id: string;
+  from_site: string | null;
+  to_site: string | null;
+  operator_id?: string | null;
+  reason: string;
+  estimated_savings: number;
+  idle_reduction_percent: number;
+  utilization_gain_percent: number;
+  fuel_impact_percent: number;
+  confidence: number;
+  actions: string[];
+  decision: OptimizationDecision;
+  created_at: string;
+  decided_at?: string | null;
 }
 
 export interface Site {
@@ -79,7 +137,7 @@ export interface InspectionRecord {
 export interface AnomalyAlert {
   id: string;
   asset_id: string;
-  type: 'High Idle' | 'Unassigned Operator' | 'Unassigned Equipment' | 'Approaching Return' | 'Overdue Rental' | 'Low Health / Maintenance' | 'Excess Fuel Burn' | 'Operator Not Certified';
+  type: 'High Idle' | 'Unassigned Operator' | 'Unassigned Equipment' | 'Approaching Return' | 'Overdue Rental' | 'Low Health / Maintenance' | 'Excess Fuel Burn' | 'Operator Not Certified' | 'Geofence Violation';
   severity: 'Critical' | 'Warning' | 'Info';
   description: string;
   metric_value: string;

@@ -9,6 +9,12 @@ import dotenv from 'dotenv';
 import { DatabaseSync } from 'node:sqlite';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './src/data/initialAssets.ts';
 import { runAnomalyDetection } from './src/utils/anomalyDetector.ts';
+import { haversineDistanceMeters } from './src/utils/geo.ts';
+import { generateOptimizationRecommendations } from './src/services/fleetOptimizer.ts';
+import { buildFleetContext } from './src/services/fleetContext.ts';
+import { getAiProvider } from './src/services/aiProvider.ts';
+import { BUSINESS_RULES } from './src/config/businessRules.ts';
+import type { GeofenceEvent, GeofenceStatus, OptimizationRecommendation } from './src/types.ts';
 
 dotenv.config();
 
@@ -84,6 +90,37 @@ db.exec(`
     last_seen_at TEXT NOT NULL,
     cleared_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS geofences (
+    id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    radius_meters REAL NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS geofence_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id TEXT NOT NULL,
+    geofence_id TEXT NOT NULL,
+    site_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    distance_m REAL NOT NULL,
+    severity TEXT NOT NULL,
+    violation_started_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    violation_count INTEGER NOT NULL DEFAULT 1,
+    resolved_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS optimization_recommendations (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    decision TEXT NOT NULL DEFAULT 'PENDING',
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+  );
 `);
 
 // Lightweight forward migration for databases created before rental-event
@@ -92,6 +129,87 @@ db.exec(`
 const rentalEventColumns = db.prepare('PRAGMA table_info(rental_events)').all() as { name: string }[];
 if (!rentalEventColumns.some((column) => column.name === 'details')) {
   db.exec('ALTER TABLE rental_events ADD COLUMN details TEXT');
+}
+
+// Seed one default geofence per known site on first boot (2km radius, per
+// BUSINESS_RULES.defaultGeofenceRadiusMeters). Managers can edit/replace
+// these via the geofence CRUD API below; this only fills the gap so every
+// site has *some* boundary from the moment the app starts.
+const existingGeofenceCount = (db.prepare('SELECT COUNT(*) as c FROM geofences').get() as { c: number }).c;
+if (existingGeofenceCount === 0) {
+  const insertGeofence = db.prepare(
+    'INSERT INTO geofences (id, site_id, name, latitude, longitude, radius_meters, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)'
+  );
+  const now = new Date().toISOString();
+  for (const site of SITES) {
+    insertGeofence.run(`GF-${site.id}`, site.id, `${site.name} Operating Boundary`, site.location[0], site.location[1], BUSINESS_RULES.defaultGeofenceRadiusMeters, now, now);
+  }
+}
+
+function getGeofences() {
+  return (db.prepare('SELECT * FROM geofences ORDER BY site_id').all() as any[]).map((row) => ({ ...row, active: Boolean(row.active) }));
+}
+
+function getActiveGeofenceForSite(siteId: string) {
+  const row = db.prepare('SELECT * FROM geofences WHERE site_id = ? AND active = 1 ORDER BY updated_at DESC LIMIT 1').get(siteId) as any;
+  return row ? { ...row, active: Boolean(row.active) } : undefined;
+}
+
+function classifyGeofenceStatus(distanceM: number, radiusM: number): GeofenceStatus {
+  if (distanceM <= radiusM * BUSINESS_RULES.nearBoundaryRatio) return 'INSIDE';
+  if (distanceM <= radiusM) return 'NEAR_BOUNDARY';
+  return 'OUTSIDE';
+}
+
+/**
+ * Evaluates one asset's live position against its assigned site's geofence
+ * and updates the open/closed violation incident in geofence_events.
+ * Deliberately does NOT create a new alert on every telemetry tick -- a
+ * violation incident is opened once when status first becomes OUTSIDE, then
+ * only its last_seen_at/violation_count/distance are updated on each
+ * subsequent tick, and it's closed (resolved_at set) once the asset returns
+ * inside the boundary. This is what keeps geofence alerts from spamming.
+ */
+function evaluateGeofence(asset: any): { status: GeofenceStatus; distance_m: number } {
+  if (!asset.site_id) return { status: 'UNKNOWN', distance_m: 0 };
+  const geofence = getActiveGeofenceForSite(asset.site_id);
+  if (!geofence) return { status: 'UNKNOWN', distance_m: 0 };
+
+  const distance = haversineDistanceMeters(asset.location, [geofence.latitude, geofence.longitude]);
+  const status = classifyGeofenceStatus(distance, geofence.radius_meters);
+  const now = new Date().toISOString();
+
+  const openEvent = db
+    .prepare('SELECT * FROM geofence_events WHERE asset_id = ? AND resolved_at IS NULL ORDER BY id DESC LIMIT 1')
+    .get(asset.id) as any;
+
+  if (status === 'OUTSIDE') {
+    const severity = distance - geofence.radius_meters >= BUSINESS_RULES.geofenceCriticalOverageMeters ? 'CRITICAL' : 'WARNING';
+    if (openEvent && openEvent.geofence_id === geofence.id) {
+      db.prepare('UPDATE geofence_events SET distance_m = ?, severity = ?, last_seen_at = ?, violation_count = violation_count + 1 WHERE id = ?')
+        .run(distance, severity, now, openEvent.id);
+    } else {
+      if (openEvent) db.prepare('UPDATE geofence_events SET resolved_at = ? WHERE id = ?').run(now, openEvent.id);
+      db.prepare(
+        'INSERT INTO geofence_events (asset_id, geofence_id, site_id, status, distance_m, severity, violation_started_at, last_seen_at, violation_count, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL)'
+      ).run(asset.id, geofence.id, asset.site_id, status, distance, severity, now, now);
+    }
+  } else if (openEvent) {
+    db.prepare('UPDATE geofence_events SET resolved_at = ? WHERE id = ?').run(now, openEvent.id);
+  }
+
+  return { status, distance_m: Math.round(distance) };
+}
+
+function getOpenGeofenceEvents(): GeofenceEvent[] {
+  return db.prepare('SELECT * FROM geofence_events WHERE resolved_at IS NULL ORDER BY violation_started_at DESC').all() as unknown as GeofenceEvent[];
+}
+
+function getGeofenceEvents(assetId?: string): GeofenceEvent[] {
+  const rows = assetId
+    ? db.prepare('SELECT * FROM geofence_events WHERE asset_id = ? ORDER BY id DESC').all(assetId)
+    : db.prepare('SELECT * FROM geofence_events ORDER BY id DESC LIMIT 200').all();
+  return rows as unknown as GeofenceEvent[];
 }
 
 const upsertAssetStmt = db.prepare(
@@ -149,6 +267,12 @@ function getRentalHistory(assetId?: string) {
 
 const liveTrackedAssetIds = new Set<string>();
 
+// Assets currently under a "Simulate Geofence Violation" demo drift -- each
+// tick nudges them further outside their assigned site's boundary instead of
+// randomly, so the demo control produces a real, visible OUTSIDE reading
+// within a couple of telemetry ticks instead of relying on chance.
+const geofenceDriftAssetIds = new Set<string>();
+
 // This is a deliberate demo telemetry source. A real deployment replaces this
 // loop with authenticated Product Link/VisionLink webhooks, but QR scanning
 // immediately creates the same persisted tracking session and live UI effect.
@@ -157,9 +281,13 @@ function publishDemoTelemetry(assetId: string) {
   if (index === -1) return;
   const current = fleetAssets[index];
   const working = current.status === 'Active';
+  const drifting = geofenceDriftAssetIds.has(assetId);
+  const location: [number, number] = drifting
+    ? [current.location[0] + 0.006, current.location[1] + 0.006]
+    : [current.location[0] + (Math.random() - 0.5) * 0.002, current.location[1] + (Math.random() - 0.5) * 0.002];
   const asset = {
     ...current,
-    location: [current.location[0] + (Math.random() - 0.5) * 0.002, current.location[1] + (Math.random() - 0.5) * 0.002] as [number, number],
+    location,
     engine_hours_day: Number((current.engine_hours_day + (working ? 0.1 : 0)).toFixed(1)),
     idle_hours_day: Number((current.idle_hours_day + (working ? 0 : 0.1)).toFixed(1)),
     fuel_level_pct: Number(Math.max(0, current.fuel_level_pct - (working ? 0.2 : 0.03)).toFixed(1)),
@@ -167,6 +295,9 @@ function publishDemoTelemetry(assetId: string) {
     tracking_status: 'Live demo telemetry',
     last_telemetry_at: new Date().toISOString(),
   };
+  const geofence = evaluateGeofence(asset);
+  asset.geofence_status = geofence.status;
+  asset.geofence_distance_m = geofence.distance_m;
   fleetAssets[index] = asset;
   persistAsset(asset);
   insertTelemetryStmt.run(asset.id, asset.last_telemetry_at, asset.location[0], asset.location[1], asset.engine_hours_day, asset.idle_hours_day, asset.fuel_level_pct, asset.status);
@@ -221,9 +352,35 @@ async function sendAutomaticAlertNotification(alertId: string) {
   db.prepare('UPDATE alerts SET data = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(latest.data), notifications, notified_at: new Date().toISOString() }), alertId);
 }
 
+// Turns each currently-open geofence violation incident into an AnomalyAlert
+// so it flows through the same acknowledge/notify/history pipeline as every
+// other alert type. One alert per open incident (not per telemetry tick) --
+// evaluateGeofence() already collapses repeat ticks into a single incident.
+function geofenceViolationAlerts(): any[] {
+  const openEvents = getOpenGeofenceEvents();
+  return openEvents.map((event) => {
+    const asset = fleetAssets.find((a) => a.id === event.asset_id);
+    const site = SITES.find((s) => s.id === event.site_id);
+    const distanceKm = (event.distance_m / 1000).toFixed(1);
+    return {
+      id: `ANOM-GEO-${event.asset_id}`,
+      asset_id: event.asset_id,
+      type: 'Geofence Violation',
+      severity: event.severity === 'CRITICAL' ? 'Critical' : 'Warning',
+      description: `${event.asset_id} has left the ${site?.name || event.site_id} geofence by ${distanceKm} km.`,
+      metric_value: `${distanceKm} km outside boundary`,
+      recommendation: asset?.status === 'Active'
+        ? 'Confirm the unit is authorized to be off-site, or dispatch a return-to-boundary instruction to the operator.'
+        : 'This unit has no active rental but is reporting movement outside its last assigned site — verify it has not been moved without authorization.',
+      timestamp: 'Geofence Rule Trigger',
+      resolved: false,
+    };
+  });
+}
+
 function refreshServerAlerts() {
   const now = new Date().toISOString();
-  const detected = runAnomalyDetection(fleetAssets, undefined, OPERATORS);
+  const detected = [...runAnomalyDetection(fleetAssets, undefined, OPERATORS), ...geofenceViolationAlerts()];
   const activeIds = new Set(detected.map((alert) => alert.id));
   const existing = db.prepare('SELECT id, data, first_seen_at FROM alerts').all() as { id: string; data: string; first_seen_at: string }[];
   const existingById = new Map(existing.map((row) => [row.id, row]));
@@ -277,6 +434,15 @@ function loadInspections(): any[] {
 // Fleet state, now backed by SQLite -- survives a server restart.
 let fleetAssets = loadOrSeedAssets();
 let inspectionLogs: any[] = loadInspections();
+// Evaluate geofence status for every asset immediately on boot, so the map
+// and dashboard show a real INSIDE/OUTSIDE reading from the first request
+// instead of waiting for the first 5s telemetry tick.
+fleetAssets = fleetAssets.map((asset) => {
+  const geofence = evaluateGeofence(asset);
+  const next = { ...asset, geofence_status: geofence.status, geofence_distance_m: geofence.distance_m };
+  persistAsset(next);
+  return next;
+});
 refreshServerAlerts();
 
 // Gemini client initialization
@@ -389,12 +555,73 @@ app.post('/api/telemetry', (req, res) => {
   const index = fleetAssets.findIndex((asset) => asset.id.toLowerCase() === String(asset_id || '').toLowerCase());
   if (index === -1) return res.status(404).json({ error: `Equipment ${asset_id} not found` });
   if (![latitude, longitude, engine_hours_day, idle_hours_day, fuel_level_pct].every(Number.isFinite)) return res.status(400).json({ error: 'latitude, longitude, engine_hours_day, idle_hours_day and fuel_level_pct must be numbers' });
-  const asset = { ...fleetAssets[index], location: [latitude, longitude] as [number, number], engine_hours_day, idle_hours_day, fuel_level_pct, status: status || fleetAssets[index].status };
+  const asset: any = { ...fleetAssets[index], location: [latitude, longitude] as [number, number], engine_hours_day, idle_hours_day, fuel_level_pct, status: status || fleetAssets[index].status };
+  const geofence = evaluateGeofence(asset);
+  asset.geofence_status = geofence.status;
+  asset.geofence_distance_m = geofence.distance_m;
   fleetAssets[index] = asset;
   persistAsset(asset);
   insertTelemetryStmt.run(asset.id, timestamp, latitude, longitude, engine_hours_day, idle_hours_day, fuel_level_pct, asset.status);
   const alerts = refreshServerAlerts();
   res.json({ success: true, asset, alerts });
+});
+
+// Live per-asset telemetry helpers -- the same persisted stream that backs
+// publishDemoTelemetry()/POST /api/telemetry, exposed for the frontend and
+// any future real telematics dashboard.
+app.get('/api/assets/:id/telemetry', (req, res) => {
+  const rows = db.prepare('SELECT * FROM telemetry_readings WHERE asset_id = ? ORDER BY id DESC LIMIT 200').all(req.params.id);
+  res.json({ success: true, readings: rows });
+});
+
+app.get('/api/assets/:id/telemetry/latest', (req, res) => {
+  const row = db.prepare('SELECT * FROM telemetry_readings WHERE asset_id = ? ORDER BY id DESC LIMIT 1').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'No telemetry recorded for this asset yet' });
+  res.json({ success: true, reading: row });
+});
+
+app.get('/api/assets/:id/usage', (req, res) => {
+  const asset = fleetAssets.find((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
+  if (!asset) return res.status(404).json({ error: 'Asset not found' });
+  const readingCount = (db.prepare('SELECT COUNT(*) as c FROM telemetry_readings WHERE asset_id = ?').get(asset.id) as { c: number }).c;
+  res.json({
+    success: true,
+    usage: {
+      asset_id: asset.id,
+      engine_hours_day: asset.engine_hours_day,
+      idle_hours_day: asset.idle_hours_day,
+      lifetime_engine_hours: asset.lifetime_engine_hours,
+      operating_days: asset.operating_days,
+      utilization_pct: Math.round((asset.engine_hours_day / Math.max(asset.engine_hours_day + asset.idle_hours_day, 0.1)) * 100),
+      telemetry_reading_count: readingCount,
+    },
+  });
+});
+
+app.get('/api/sites/:id/usage', (req, res) => {
+  const site = SITES.find((s) => s.id === req.params.id);
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+  const siteAssets = fleetAssets.filter((a) => a.site_id === site.id);
+  const totalEngine = siteAssets.reduce((sum, a) => sum + a.engine_hours_day * a.operating_days, 0);
+  const totalIdle = siteAssets.reduce((sum, a) => sum + a.idle_hours_day * a.operating_days, 0);
+  res.json({
+    success: true,
+    usage: {
+      site_id: site.id,
+      site_name: site.name,
+      asset_count: siteAssets.length,
+      active_count: siteAssets.filter((a) => a.status === 'Active').length,
+      total_engine_hours: Math.round(totalEngine),
+      total_idle_hours: Math.round(totalIdle),
+      utilization_pct: Math.round((totalEngine / Math.max(totalEngine + totalIdle, 1)) * 100),
+    },
+  });
+});
+
+app.get('/api/telemetry/summary', (req, res) => {
+  const totalReadings = (db.prepare('SELECT COUNT(*) as c FROM telemetry_readings').get() as { c: number }).c;
+  const latestPerAsset = fleetAssets.map((a) => ({ asset_id: a.id, last_telemetry_at: a.last_telemetry_at || null, tracking_enabled: Boolean(a.tracking_enabled), geofence_status: a.geofence_status || 'UNKNOWN' }));
+  res.json({ success: true, total_readings: totalReadings, assets: latestPerAsset });
 });
 
 // 2. Get asset by ID
@@ -690,6 +917,289 @@ Only output valid JSON.`;
       source: 'rules-engine',
     },
   });
+});
+
+// -------------------------------------------------------------
+// GEOFENCING
+// -------------------------------------------------------------
+
+app.get('/api/geofences', (req, res) => {
+  res.json({ success: true, geofences: getGeofences() });
+});
+
+app.get('/api/geofences/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM geofences WHERE id = ?').get(req.params.id) as any;
+  if (!row) return res.status(404).json({ error: 'Geofence not found' });
+  res.json({ success: true, geofence: { ...row, active: Boolean(row.active) } });
+});
+
+app.post('/api/geofences', (req, res) => {
+  const { site_id, name, latitude, longitude, radius_meters, active = true } = req.body;
+  const site = SITES.find((s) => s.id === site_id);
+  if (!site) return res.status(400).json({ error: 'A valid site_id is required' });
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
+  if (![latitude, longitude, radius_meters].every(Number.isFinite) || radius_meters <= 0) {
+    return res.status(400).json({ error: 'latitude, longitude must be numbers and radius_meters must be a positive number' });
+  }
+  const id = `GF-${site_id}-${Date.now()}`;
+  const now = new Date().toISOString();
+  db.prepare('INSERT INTO geofences (id, site_id, name, latitude, longitude, radius_meters, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, site_id, name, latitude, longitude, radius_meters, active ? 1 : 0, now, now);
+  res.status(201).json({ success: true, geofence: { id, site_id, name, latitude, longitude, radius_meters, active, created_at: now, updated_at: now } });
+});
+
+app.put('/api/geofences/:id', (req, res) => {
+  const existing = db.prepare('SELECT * FROM geofences WHERE id = ?').get(req.params.id) as any;
+  if (!existing) return res.status(404).json({ error: 'Geofence not found' });
+  const { name = existing.name, latitude = existing.latitude, longitude = existing.longitude, radius_meters = existing.radius_meters, active = Boolean(existing.active) } = req.body;
+  if (![latitude, longitude, radius_meters].every(Number.isFinite) || radius_meters <= 0) {
+    return res.status(400).json({ error: 'latitude, longitude must be numbers and radius_meters must be a positive number' });
+  }
+  const now = new Date().toISOString();
+  db.prepare('UPDATE geofences SET name = ?, latitude = ?, longitude = ?, radius_meters = ?, active = ?, updated_at = ? WHERE id = ?')
+    .run(name, latitude, longitude, radius_meters, active ? 1 : 0, now, req.params.id);
+  res.json({ success: true, geofence: { ...existing, name, latitude, longitude, radius_meters, active, updated_at: now } });
+});
+
+app.delete('/api/geofences/:id', (req, res) => {
+  const existing = db.prepare('SELECT id FROM geofences WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Geofence not found' });
+  db.prepare('DELETE FROM geofences WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+app.get('/api/geofence-events', (req, res) => {
+  const assetId = typeof req.query.asset_id === 'string' ? req.query.asset_id : undefined;
+  res.json({ success: true, events: getGeofenceEvents(assetId), open_count: getOpenGeofenceEvents().length });
+});
+
+// -------------------------------------------------------------
+// SMART FLEET OPTIMIZATION & DISPATCH ENGINE
+// -------------------------------------------------------------
+
+function computeAndPersistRecommendations(): OptimizationRecommendation[] {
+  const draft = generateOptimizationRecommendations({ assets: fleetAssets, sites: SITES, operators: OPERATORS });
+  const now = new Date().toISOString();
+  for (const rec of draft) {
+    // Deterministic id from what the recommendation actually is, so a fresh
+    // computation on an unchanged fleet state updates the same row instead of
+    // creating a duplicate pending card every time the dashboard polls.
+    const id = `OPT-${rec.type}-${rec.asset_id}-${rec.to_site || 'NA'}`;
+    const existing = db.prepare('SELECT id, decision FROM optimization_recommendations WHERE id = ?').get(id) as { id: string; decision: string } | undefined;
+    if (existing && existing.decision !== 'PENDING') continue; // don't resurrect a decided recommendation
+    if (existing) {
+      db.prepare('UPDATE optimization_recommendations SET data = ? WHERE id = ?').run(JSON.stringify({ ...rec, id }), id);
+    } else {
+      db.prepare('INSERT INTO optimization_recommendations (id, data, decision, created_at, decided_at) VALUES (?, ?, ?, ?, NULL)')
+        .run(id, JSON.stringify({ ...rec, id }), 'PENDING', now);
+    }
+  }
+  return getRecommendations();
+}
+
+function getRecommendations(includeDecided = true): OptimizationRecommendation[] {
+  const rows = db.prepare(`SELECT data, decision, created_at, decided_at FROM optimization_recommendations ${includeDecided ? '' : "WHERE decision = 'PENDING'"} ORDER BY created_at DESC LIMIT 100`).all() as any[];
+  return rows.map((row) => ({ ...JSON.parse(row.data), decision: row.decision, created_at: row.created_at, decided_at: row.decided_at }));
+}
+
+app.get('/api/optimization/recommendations', (req, res) => {
+  const recommendations = computeAndPersistRecommendations();
+  res.json({ success: true, recommendations });
+});
+
+app.post('/api/optimization/recommendations/:id/accept', (req, res) => {
+  const row = db.prepare('SELECT data, decision FROM optimization_recommendations WHERE id = ?').get(req.params.id) as { data: string; decision: string } | undefined;
+  if (!row) return res.status(404).json({ error: 'Recommendation not found' });
+  if (row.decision !== 'PENDING') return res.status(409).json({ error: `Recommendation already ${row.decision.toLowerCase()}` });
+  const rec: OptimizationRecommendation = JSON.parse(row.data);
+  const index = fleetAssets.findIndex((a) => a.id === rec.asset_id);
+  if (index === -1) return res.status(404).json({ error: `Equipment ${rec.asset_id} not found` });
+
+  if (rec.type === 'RELOCATE_ASSET') {
+    const targetSite = SITES.find((s) => s.id === rec.to_site);
+    if (!targetSite) return res.status(400).json({ error: 'Destination site no longer exists' });
+    const operator = rec.operator_id ? OPERATORS.find((o) => o.id === rec.operator_id) : undefined;
+    fleetAssets[index] = {
+      ...fleetAssets[index],
+      site_id: targetSite.id,
+      site_name: targetSite.name,
+      location: targetSite.location,
+      operator_id: operator?.id || fleetAssets[index].operator_id,
+      operator_name: operator?.name || fleetAssets[index].operator_name,
+    };
+    recordRentalEvent(fleetAssets[index], 'checkout', 'manual', { relocation: true, from_site: rec.from_site, to_site: rec.to_site, optimization_id: rec.id });
+  } else if (rec.type === 'RETURN_EARLY') {
+    fleetAssets[index] = { ...fleetAssets[index], status: 'Idle', operator_id: null, operator_name: null, returned_at: new Date().toISOString() };
+    recordRentalEvent(fleetAssets[index], 'checkin', 'manual', { early_return: true, optimization_id: rec.id });
+  } else if (rec.type === 'ASSIGN_OPERATOR') {
+    const operator = rec.operator_id ? OPERATORS.find((o) => o.id === rec.operator_id) : undefined;
+    if (!operator) return res.status(400).json({ error: 'Recommended operator no longer available' });
+    fleetAssets[index] = { ...fleetAssets[index], operator_id: operator.id, operator_name: operator.name };
+    recordRentalEvent(fleetAssets[index], 'checkout', 'manual', { operator_assignment: true, optimization_id: rec.id });
+  }
+
+  persistAsset(fleetAssets[index]);
+  const now = new Date().toISOString();
+  db.prepare('UPDATE optimization_recommendations SET decision = ?, decided_at = ? WHERE id = ?').run('ACCEPTED', now, rec.id);
+  refreshServerAlerts();
+  res.json({ success: true, asset: fleetAssets[index], recommendation: { ...rec, decision: 'ACCEPTED', decided_at: now } });
+});
+
+app.post('/api/optimization/recommendations/:id/dismiss', (req, res) => {
+  const row = db.prepare('SELECT decision FROM optimization_recommendations WHERE id = ?').get(req.params.id) as { decision: string } | undefined;
+  if (!row) return res.status(404).json({ error: 'Recommendation not found' });
+  if (row.decision !== 'PENDING') return res.status(409).json({ error: `Recommendation already ${row.decision.toLowerCase()}` });
+  const now = new Date().toISOString();
+  db.prepare('UPDATE optimization_recommendations SET decision = ?, decided_at = ? WHERE id = ?').run('DISMISSED', now, req.params.id);
+  res.json({ success: true });
+});
+
+// -------------------------------------------------------------
+// AI COPILOT
+// -------------------------------------------------------------
+
+app.get('/api/ai/context', (req, res) => {
+  const context = buildFleetContext({
+    assets: fleetAssets,
+    sites: SITES,
+    operators: OPERATORS,
+    alerts: getAlerts() as any,
+    openGeofenceEvents: getOpenGeofenceEvents(),
+    recommendations: getRecommendations(),
+  });
+  res.json({ success: true, context });
+});
+
+const AI_SYSTEM_INSTRUCTION = `You are SmartRent Copilot, the AI assistant embedded in a construction/mining equipment rental fleet platform.
+You are given a JSON "context" object containing the CURRENT, real, server-computed state of the fleet (assets, alerts, geofence violations, optimization recommendations, financial estimates). This is the only source of truth you may use for facts and numbers.
+Rules:
+- NEVER invent asset IDs, sites, operators, or numbers that are not present in the provided context.
+- All financial/idle-cost figures are already calculated for you in the context; reuse them, do not recompute or guess new ones.
+- If the user asks you to take an action that changes fleet state (relocate/return/reassign an asset), do NOT claim you performed it. Instead propose it via the action_proposal field and require the user to confirm in the UI.
+- Only propose an action_proposal of type "RELOCATE_ASSET", "RETURN_EARLY", or "ASSIGN_OPERATOR", and only using an asset_id and site/operator ids that exist in the context. If the best matching action exists in top_recommendations, reuse its id as recommendation_id.
+- Be concise, specific, and prioritized. When asked "what needs my attention" or "top priorities", rank by severity/cost and reference concrete asset IDs.
+- If information isn't in the context, say so plainly instead of guessing.
+Respond ONLY with a JSON object of this exact shape:
+{ "answer": "markdown-formatted natural language answer", "action_proposal": null | { "type": "RELOCATE_ASSET" | "RETURN_EARLY" | "ASSIGN_OPERATOR", "asset_id": string, "recommendation_id": string | null, "summary": string } }`;
+
+function ruleBasedAiFallback(message: string, context: ReturnType<typeof buildFleetContext>) {
+  const lower = message.toLowerCase();
+  const lines: string[] = [];
+  if (lower.includes('attention') || lower.includes('priorit') || lower.includes('summary') || lower.includes('summarize')) {
+    lines.push(`**Fleet snapshot** — ${context.fleet_summary.total_assets} assets, ${context.fleet_summary.active} active, ${context.fleet_summary.overdue_rentals} overdue, ${context.fleet_summary.active_geofence_violations} geofence violation(s).`);
+    lines.push(`Estimated idle waste: **$${context.fleet_summary.estimated_daily_idle_waste_usd.toLocaleString()}/day** ($${context.fleet_summary.estimated_weekly_idle_waste_usd.toLocaleString()}/week).`);
+    context.active_alerts.filter((a) => a.severity === 'Critical').slice(0, 5).forEach((a, i) => {
+      lines.push(`${i + 1}. **${a.asset_id}** — ${a.type}: ${a.description}`);
+    });
+  } else if (lower.includes('idle')) {
+    const idleAssets = context.assets.filter((a) => a.idle_hours_day > BUSINESS_RULES.highIdleHoursPerDay.warning);
+    lines.push(idleAssets.length ? `Idle units: ${idleAssets.map((a) => `**${a.id}** (${a.idle_hours_day}h/day, ~$${a.estimated_daily_idle_waste_usd}/day waste)`).join(', ')}` : 'No units are currently above the high-idle threshold.');
+  } else if (lower.includes('overdue')) {
+    const overdue = context.assets.filter((a) => a.is_overdue);
+    lines.push(overdue.length ? `Overdue rentals: ${overdue.map((a) => `**${a.id}** (due ${a.checkin_date})`).join(', ')}` : 'No rentals are currently overdue.');
+  } else if (lower.includes('geofence') || lower.includes('outside')) {
+    lines.push(context.geofence_violations.length ? context.geofence_violations.map((v) => `**${v.asset_id}** is ${(v.distance_m / 1000).toFixed(1)} km outside its ${v.site_id} boundary (${v.severity}).`).join('\n') : 'No active geofence violations.');
+  } else {
+    lines.push(`I couldn't reach the AI model, so here's what the fleet data shows directly: ${context.fleet_summary.active} active, ${context.fleet_summary.overdue_rentals} overdue, ${context.fleet_summary.active_geofence_violations} geofence violation(s), estimated idle waste $${context.fleet_summary.estimated_daily_idle_waste_usd}/day. Ask about "idle", "overdue", "geofence", or "priorities" for specifics.`);
+  }
+  return { answer: lines.join('\n\n'), action_proposal: null, source: 'rules-engine' as const };
+}
+
+app.post('/api/ai/chat', async (req, res) => {
+  const { message, history = [] } = req.body;
+  if (!message || typeof message !== 'string') return res.status(400).json({ error: 'message is required' });
+
+  const context = buildFleetContext({
+    assets: fleetAssets,
+    sites: SITES,
+    operators: OPERATORS,
+    alerts: getAlerts() as any,
+    openGeofenceEvents: getOpenGeofenceEvents(),
+    recommendations: getRecommendations(),
+  });
+
+  const provider = getAiProvider();
+  if (!provider.available) {
+    return res.json({ success: true, ...ruleBasedAiFallback(message, context) });
+  }
+
+  try {
+    const historyText = Array.isArray(history) && history.length
+      ? `\n\nRecent conversation:\n${history.slice(-6).map((h: any) => `${h.role}: ${h.content}`).join('\n')}`
+      : '';
+    const prompt = `Fleet context (JSON):\n${JSON.stringify(context)}${historyText}\n\nUser question: ${message}`;
+    const result = await provider.generateJSON<{ answer: string; action_proposal: any }>(prompt, {
+      systemInstruction: AI_SYSTEM_INSTRUCTION,
+      temperature: 0.2,
+    });
+    res.json({ success: true, answer: result.answer, action_proposal: result.action_proposal || null, source: provider.name });
+  } catch (error: any) {
+    console.warn('AI chat provider failed, using rules-engine fallback:', error.message);
+    res.json({ success: true, ...ruleBasedAiFallback(message, context), fallback_reason: error.message });
+  }
+});
+
+// -------------------------------------------------------------
+// DEMO SCENARIO CONTROLS
+// -------------------------------------------------------------
+// Each control here calls the SAME backend logic real telemetry/events would
+// hit (evaluateGeofence, refreshServerAlerts, persistAsset) -- it just seeds
+// a starting condition instead of waiting on the random walk. Nothing here
+// fabricates a UI-only alert.
+
+app.post('/api/demo/simulate-geofence-violation/:id', (req, res) => {
+  const asset = fleetAssets.find((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
+  if (!asset) return res.status(404).json({ error: 'Asset not found' });
+  if (!asset.site_id) return res.status(400).json({ error: 'Asset must be assigned to a site to simulate a geofence violation' });
+  geofenceDriftAssetIds.add(asset.id);
+  liveTrackedAssetIds.add(asset.id);
+  publishDemoTelemetry(asset.id);
+  publishDemoTelemetry(asset.id);
+  publishDemoTelemetry(asset.id);
+  res.json({ success: true, message: `${asset.id} is now drifting outside its assigned geofence on each telemetry tick.`, asset: fleetAssets.find((a) => a.id === asset.id) });
+});
+
+app.post('/api/demo/clear-geofence-violation/:id', (req, res) => {
+  const index = fleetAssets.findIndex((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
+  if (index === -1) return res.status(404).json({ error: 'Asset not found' });
+  geofenceDriftAssetIds.delete(fleetAssets[index].id);
+  const site = SITES.find((s) => s.id === fleetAssets[index].site_id);
+  if (site) fleetAssets[index] = { ...fleetAssets[index], location: site.location };
+  const geofence = evaluateGeofence(fleetAssets[index]);
+  fleetAssets[index].geofence_status = geofence.status;
+  fleetAssets[index].geofence_distance_m = geofence.distance_m;
+  persistAsset(fleetAssets[index]);
+  refreshServerAlerts();
+  res.json({ success: true, asset: fleetAssets[index] });
+});
+
+app.post('/api/demo/simulate-high-idle/:id', (req, res) => {
+  const index = fleetAssets.findIndex((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
+  if (index === -1) return res.status(404).json({ error: 'Asset not found' });
+  fleetAssets[index] = { ...fleetAssets[index], idle_hours_day: 11.5, engine_hours_day: Math.min(fleetAssets[index].engine_hours_day, 0.5) };
+  persistAsset(fleetAssets[index]);
+  refreshServerAlerts();
+  res.json({ success: true, asset: fleetAssets[index] });
+});
+
+app.post('/api/demo/simulate-maintenance-alert/:id', (req, res) => {
+  const index = fleetAssets.findIndex((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
+  if (index === -1) return res.status(404).json({ error: 'Asset not found' });
+  fleetAssets[index] = { ...fleetAssets[index], health_score: 42, next_maintenance_hours: 0 };
+  persistAsset(fleetAssets[index]);
+  refreshServerAlerts();
+  res.json({ success: true, asset: fleetAssets[index] });
+});
+
+app.post('/api/demo/simulate-overdue-rental/:id', (req, res) => {
+  const index = fleetAssets.findIndex((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
+  if (index === -1) return res.status(404).json({ error: 'Asset not found' });
+  const overdueDate = new Date();
+  overdueDate.setDate(overdueDate.getDate() - 3);
+  fleetAssets[index] = { ...fleetAssets[index], status: 'Active', checkin_date: overdueDate.toISOString().split('T')[0] };
+  persistAsset(fleetAssets[index]);
+  refreshServerAlerts();
+  res.json({ success: true, asset: fleetAssets[index] });
 });
 
 // -------------------------------------------------------------

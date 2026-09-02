@@ -1,11 +1,20 @@
 import React, { useState } from 'react';
-import { AlertTriangle, BarChart3, Bell, ClipboardCheck, Cpu, History, Layers, Menu, RefreshCw, ScanLine, Search, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bell, ClipboardCheck, Cpu, History, Layers, Map as MapIcon, Menu, RefreshCw, ScanLine, Search, Sparkles, Wrench, X } from 'lucide-react';
 import { Asset, AnomalyAlert } from '../types';
 
-type Tab = 'map' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies' | 'history';
+export type Tab = 'map' | 'fleetmap' | 'analytics' | 'checkinout' | 'ai-forecasting' | 'inspection' | 'anomalies' | 'history' | 'optimization' | 'copilot';
 interface HeaderProps { activeTab: Tab; setActiveTab: (tab: Tab) => void; assets: Asset[]; alerts: AnomalyAlert[]; onOpenCheckInOut: (type: 'checkout' | 'checkin') => void; onOpenInspection: () => void; onRefresh: () => void; }
 const NAV_ITEMS: { id: Tab; label: string; icon: React.ElementType }[] = [
-  { id: 'map', label: 'Executive Dashboard', icon: Layers }, { id: 'checkinout', label: 'Equipment / Fleet', icon: ScanLine }, { id: 'analytics', label: 'Analytics', icon: BarChart3 }, { id: 'ai-forecasting', label: 'Demand Forecast', icon: Cpu }, { id: 'inspection', label: 'Maintenance', icon: Wrench }, { id: 'anomalies', label: 'Alerts', icon: AlertTriangle }, { id: 'history', label: 'Audit History', icon: History },
+  { id: 'map', label: 'Executive Dashboard', icon: Layers },
+  { id: 'fleetmap', label: 'Fleet Map', icon: MapIcon },
+  { id: 'checkinout', label: 'Equipment / Fleet', icon: ScanLine },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+  { id: 'optimization', label: 'AI Action Center', icon: Sparkles },
+  { id: 'copilot', label: 'SmartRent Copilot', icon: Sparkles },
+  { id: 'ai-forecasting', label: 'Demand Forecast', icon: Cpu },
+  { id: 'inspection', label: 'Maintenance', icon: Wrench },
+  { id: 'anomalies', label: 'Alerts', icon: AlertTriangle },
+  { id: 'history', label: 'Audit History', icon: History },
 ];
 
 export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, assets, alerts, onOpenCheckInOut, onOpenInspection, onRefresh }) => {

@@ -18,16 +18,19 @@ import {
   QrCode,
   History
 } from 'lucide-react';
-import { Asset, Site } from '../types';
+import { Asset, Site, Geofence, GeofenceEvent } from '../types';
 
 interface FleetMapViewProps {
   assets: Asset[];
   sites: Site[];
+  geofences: Geofence[];
+  geofenceEvents: GeofenceEvent[];
   selectedAsset: Asset | null;
   onSelectAsset: (asset: Asset | null) => void;
   onCheckInOut: (asset: Asset, mode: 'checkin' | 'checkout') => void;
   onInspect: (asset: Asset) => void;
   onShowQrCode: (asset: Asset) => void;
+  onAskAi?: (asset: Asset) => void;
 }
 
 interface RentalEvent {
@@ -42,11 +45,14 @@ interface RentalEvent {
 export const FleetMapView: React.FC<FleetMapViewProps> = ({
   assets,
   sites,
+  geofences,
+  geofenceEvents,
   selectedAsset,
   onSelectAsset,
   onCheckInOut,
   onInspect,
   onShowQrCode,
+  onAskAi,
 }) => {
   const [rentalHistory, setRentalHistory] = useState<RentalEvent[]>([]);
 
@@ -63,6 +69,8 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersRef = useRef<Record<string, L.Marker>>({});
+  const geofenceLayersRef = useRef<L.Circle[]>([]);
+  const [mapReady, setMapReady] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -94,6 +102,7 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
       }).setView([37.0902, -95.7129], 4); // US Center View
 
       mapInstanceRef.current = map;
+      setMapReady(true);
     }
 
     const map = mapInstanceRef.current;
@@ -209,6 +218,40 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
     });
   }, [filteredAssets, selectedAsset, onSelectAsset]);
 
+  // Draw each site's geofence boundary as a circle, colored by whether any
+  // asset assigned to that site is currently violating it.
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !mapReady) return;
+
+    geofenceLayersRef.current.forEach((circle) => circle.remove());
+    geofenceLayersRef.current = [];
+
+    const openBySite = new Map<string, GeofenceEvent[]>();
+    geofenceEvents.filter((e) => !e.resolved_at).forEach((e) => {
+      openBySite.set(e.site_id, [...(openBySite.get(e.site_id) || []), e]);
+    });
+
+    geofences.filter((g) => g.active).forEach((geofence) => {
+      const violations = openBySite.get(geofence.site_id) || [];
+      const hasCritical = violations.some((v) => v.severity === 'CRITICAL');
+      const color = violations.length ? (hasCritical ? '#EF4444' : '#F59E0B') : '#10B981';
+      const circle = L.circle([geofence.latitude, geofence.longitude], {
+        radius: geofence.radius_meters,
+        color,
+        weight: 2,
+        fillColor: color,
+        fillOpacity: violations.length ? 0.12 : 0.06,
+        dashArray: violations.length ? undefined : '4 6',
+      }).addTo(map);
+      circle.bindTooltip(
+        `${geofence.name}${violations.length ? ` — ${violations.length} unit(s) outside boundary` : ' — compliant'}`,
+        { direction: 'top', sticky: true }
+      );
+      geofenceLayersRef.current.push(circle);
+    });
+  }, [geofences, geofenceEvents, mapReady]);
+
   return (
     <div className="space-y-4">
       {/* Top Filter and Search Control Bar */}
@@ -323,8 +366,13 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
           {/* Quick Map Overlay Summary Badge */}
           <div className="absolute bottom-5 left-5 z-20 bg-neutral-950/85 backdrop-blur-md text-white px-3.5 py-2.5 rounded-xl border border-white/10 shadow-lg text-xs flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-[#10B981] animate-ping" />
-              <span className="font-semibold text-neutral-200">Active Geofences: 6 Sites</span>
+              <div className={`w-2 h-2 rounded-full animate-ping ${geofenceEvents.filter((e) => !e.resolved_at).length ? 'bg-rose-500' : 'bg-[#10B981]'}`} />
+              <span className="font-semibold text-neutral-200">
+                Active Geofences: {geofences.filter((g) => g.active).length} Sites
+                {geofenceEvents.filter((e) => !e.resolved_at).length > 0 && (
+                  <span className="text-rose-400"> · {geofenceEvents.filter((e) => !e.resolved_at).length} violation(s)</span>
+                )}
+              </span>
             </div>
             <div className="h-3 w-px bg-neutral-700" />
             <div className="text-neutral-400">
@@ -372,6 +420,24 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
                   ✕
                 </button>
               </div>
+
+              {/* Geofence Status */}
+              {selectedAsset.geofence_status && selectedAsset.geofence_status !== 'UNKNOWN' && (
+                <div
+                  className={`p-3 rounded-xl border flex items-center justify-between text-xs ${
+                    selectedAsset.geofence_status === 'OUTSIDE'
+                      ? 'bg-rose-50/80 border-rose-200/80 text-rose-800'
+                      : selectedAsset.geofence_status === 'NEAR_BOUNDARY'
+                      ? 'bg-amber-50/80 border-amber-200/80 text-amber-800'
+                      : 'bg-emerald-50/60 border-emerald-200/70 text-emerald-800'
+                  }`}
+                >
+                  <span className="font-bold">Geofence: {selectedAsset.geofence_status.replace('_', ' ')}</span>
+                  {typeof selectedAsset.geofence_distance_m === 'number' && (
+                    <span className="font-mono">{(selectedAsset.geofence_distance_m / 1000).toFixed(2)} km from center</span>
+                  )}
+                </div>
+              )}
 
               {/* Anomaly Alerts on this Machine */}
               {selectedAsset.anomalies.length > 0 && (
@@ -540,11 +606,20 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
 
                 <button
                   onClick={() => onShowQrCode(selectedAsset)}
-                  className="col-span-2 w-full py-2 px-3 rounded-xl text-xs font-bold bg-white text-neutral-800 border border-neutral-200 hover:bg-neutral-50 transition-colors shadow-2xs cursor-pointer flex items-center justify-center gap-1"
+                  className="w-full py-2 px-3 rounded-xl text-xs font-bold bg-white text-neutral-800 border border-neutral-200 hover:bg-neutral-50 transition-colors shadow-2xs cursor-pointer flex items-center justify-center gap-1"
                 >
                   <QrCode className="w-3.5 h-3.5 text-neutral-600" />
                   <span>View QR Tag</span>
                 </button>
+
+                {onAskAi && (
+                  <button
+                    onClick={() => onAskAi(selectedAsset)}
+                    className="w-full py-2 px-3 rounded-xl text-xs font-bold bg-white text-neutral-800 border border-neutral-200 hover:bg-neutral-50 transition-colors shadow-2xs cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <span>Ask AI</span>
+                  </button>
+                )}
               </div>
             </div>
           ) : (

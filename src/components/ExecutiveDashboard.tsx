@@ -1,11 +1,19 @@
 import React from 'react';
 import { AlertTriangle, ArrowUpRight, Fuel, Gauge, MapPin, Wrench } from 'lucide-react';
-import { Asset, AnomalyAlert, Site } from '../types';
+import { Asset, AnomalyAlert, Site, GeofenceEvent, OptimizationRecommendation } from '../types';
 
-interface Props { assets: Asset[]; sites: Site[]; alerts: AnomalyAlert[]; onSelectAsset: (asset: Asset) => void; onOpenAlerts: () => void; }
+interface Props {
+  assets: Asset[];
+  sites: Site[];
+  alerts: AnomalyAlert[];
+  geofenceEvents?: GeofenceEvent[];
+  recommendations?: OptimizationRecommendation[];
+  onSelectAsset: (asset: Asset) => void;
+  onOpenAlerts: () => void;
+}
 const statusTone = (asset: Asset) => asset.status === 'Under Maintenance' ? 'maintenance' : asset.status === 'Idle' ? 'idle' : 'inuse';
 
-export function ExecutiveDashboard({ assets, sites, alerts, onSelectAsset, onOpenAlerts }: Props) {
+export function ExecutiveDashboard({ assets, sites, alerts, geofenceEvents = [], recommendations = [], onSelectAsset, onOpenAlerts }: Props) {
   const active = assets.filter((a) => a.status === 'Active').length;
   const idle = assets.filter((a) => a.status === 'Idle').length;
   const maintenance = assets.filter((a) => a.status === 'Under Maintenance').length;
@@ -25,7 +33,11 @@ export function ExecutiveDashboard({ assets, sites, alerts, onSelectAsset, onOpe
     const idleH = onRent.reduce((acc, a) => acc + a.idle_hours_day, 0);
     return Math.round((engine / Math.max(engine + idleH, 1)) * 100);
   });
-  const kpis = [ ['Total equipment', assets.length, 'Connected units'], ['Currently rented', active, `${Math.round(active / Math.max(assets.length, 1) * 100)}% of fleet`], ['Idle', idle, 'Needs allocation'], ['Overdue', overdue, overdue ? 'Needs attention' : 'On schedule'], ['Under maintenance', maintenance, 'Service queue'], ['Total rental hours', Math.round(totalEngine + totalIdle).toLocaleString(), 'Recorded period'], ['Total usage hours', Math.round(totalEngine).toLocaleString(), `${utilization}% utilization`], ['Fuel consumed', `${fuel.toLocaleString()} L`, 'Estimated from usage'] ];
+  const openViolations = geofenceEvents.filter((e) => !e.resolved_at);
+  const violatedSites = new Set(openViolations.map((e) => e.site_id));
+  const geofenceCompliance = Math.round(((sites.length - Math.min(violatedSites.size, sites.length)) / Math.max(sites.length, 1)) * 100);
+  const potentialSavings = recommendations.filter((r) => r.decision === 'PENDING').reduce((sum, r) => sum + r.estimated_savings, 0);
+  const kpis = [ ['Total equipment', assets.length, 'Connected units'], ['Currently rented', active, `${Math.round(active / Math.max(assets.length, 1) * 100)}% of fleet`], ['Idle', idle, 'Needs allocation'], ['Overdue', overdue, overdue ? 'Needs attention' : 'On schedule'], ['Under maintenance', maintenance, 'Service queue'], ['Geofence compliance', `${geofenceCompliance}%`, openViolations.length ? `${openViolations.length} active violation(s)` : 'All sites compliant'], ['Potential savings', `$${potentialSavings.toLocaleString()}`, 'From pending AI recommendations'], ['Fuel consumed', `${fuel.toLocaleString()} L`, 'Estimated from usage'] ];
   return <div className="space-y-6">
     <section className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end"><div><p className="smartrent-eyebrow">Executive asset dashboard</p><h1 className="smartrent-title">Fleet command center</h1><p className="mt-1 text-sm text-slate-500">Live rental, utilization and condition signals across your connected equipment.</p></div><button onClick={onOpenAlerts} className="smartrent-outline"><AlertTriangle className="h-4 w-4" /> {alerts.filter((a) => !a.resolved).length} active signals</button></section>
     <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">{kpis.map(([label, value, note]) => <article key={label} className="smartrent-metric"><p className="smartrent-eyebrow">{label}</p><p className="mt-2 font-mono text-2xl font-bold tracking-tight text-slate-800">{value}</p><p className={`mt-2 text-xs ${label === 'Overdue' && overdue ? 'text-red-600' : 'text-emerald-700'}`}>{note}</p></article>)}</section>
