@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { Asset, Site } from '../types';
 import { downloadCsv } from '../utils/exportCsv';
+import { BUSINESS_RULES } from '../config/businessRules';
 
 ChartJS.register(
   CategoryScale,
@@ -66,6 +67,14 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
 
   // Carbon Waste: 2.68 kg CO2 per liter of diesel burned at idle (~3.5 L/hr at idle)
   const dailyIdleCO2Kg = Math.round(totalIdleHoursDay * 3.5 * 2.68);
+
+  const fleetAvgFuelBurnLph = assets.length > 0
+    ? Number((assets.reduce((acc, a) => acc + a.fuel_burn_rate_lph, 0) / assets.length).toFixed(1))
+    : 0;
+  const overFuelCeilingCount = assets.filter((a) => {
+    const ceiling = BUSINESS_RULES.fuelBurnCeilingLph[a.type];
+    return ceiling && a.fuel_burn_rate_lph > ceiling;
+  }).length;
 
   // Usage & Downtime Summary Per Site: cumulative rented hours over the life of each
   // check-out (engine/idle rate x operating_days), grouped by site_id, with a
@@ -195,17 +204,33 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
     },
   };
 
-  // 1. Line Chart Data: 7-Day Fuel Burn Trend (Liters / Hour)
-  const daysLabels = timeRange === '7d' 
-    ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] 
+  // 1. Line Chart Data: Fuel Burn by Equipment Family (Liters / Hour)
+  // Derived from each asset's own live fuel_burn_rate_lph, grouped by
+  // family, so the chart tracks real telemetry instead of invented series.
+  // There's no historical time-series storage yet, so every point on the
+  // x-axis (day/week) repeats today's real fleet average for that family --
+  // an honest flat baseline rather than a fabricated trend.
+  const daysLabels = timeRange === '7d'
+    ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     : ['Wk 1', 'Wk 2', 'Wk 3', 'Wk 4'];
+  const pointCount = daysLabels.length;
+
+  const avgBurnFor = (types: string[]) => {
+    const matches = assets.filter((a) => types.includes(a.type));
+    if (matches.length === 0) return 0;
+    return Number((matches.reduce((acc, a) => acc + a.fuel_burn_rate_lph, 0) / matches.length).toFixed(1));
+  };
+  const bulldozerAvgBurn = avgBurnFor(['Bulldozer']);
+  const excavatorAvgBurn = avgBurnFor(['Excavator']);
+  const graderCraneAvgBurn = avgBurnFor(['Grader', 'Crane']);
+  const fleetEcoTargetBurn = Number((Object.values(BUSINESS_RULES.fuelBurnCeilingLph).reduce((a, b) => a + b, 0) / Object.keys(BUSINESS_RULES.fuelBurnCeilingLph).length).toFixed(0));
 
   const fuelBurnLineData = {
     labels: daysLabels,
     datasets: [
       {
         label: 'Cat Bulldozers (D6T/D8T)',
-        data: timeRange === '7d' ? [21.5, 23.2, 22.8, 25.1, 24.6, 18.2, 19.0] : [22.1, 23.5, 24.0, 22.8],
+        data: Array(pointCount).fill(bulldozerAvgBurn),
         borderColor: '#FFCD00',
         backgroundColor: 'rgba(255, 205, 0, 0.12)',
         tension: 0.35,
@@ -215,7 +240,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       },
       {
         label: 'Cat Excavators (320/349)',
-        data: timeRange === '7d' ? [14.2, 15.1, 16.0, 14.8, 15.5, 12.0, 13.5] : [14.9, 15.2, 15.8, 14.5],
+        data: Array(pointCount).fill(excavatorAvgBurn),
         borderColor: '#1D1D1F',
         backgroundColor: 'rgba(29, 29, 31, 0.05)',
         tension: 0.35,
@@ -225,7 +250,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       },
       {
         label: 'Cat Graders & Cranes',
-        data: timeRange === '7d' ? [11.0, 12.4, 10.8, 11.5, 12.0, 8.5, 9.0] : [11.2, 11.8, 12.1, 10.9],
+        data: Array(pointCount).fill(graderCraneAvgBurn),
         borderColor: '#10B981',
         borderDash: [5, 5],
         tension: 0.35,
@@ -233,7 +258,7 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
       },
       {
         label: 'Cat Eco-Mode Target (Max)',
-        data: timeRange === '7d' ? [16, 16, 16, 16, 16, 16, 16] : [16, 16, 16, 16],
+        data: Array(pointCount).fill(fleetEcoTargetBurn),
         borderColor: '#94A3B8',
         borderDash: [3, 3],
         pointRadius: 0,
@@ -400,11 +425,15 @@ export const TelemetryAnalytics: React.FC<TelemetryAnalyticsProps> = ({
           </div>
           <div className="mt-3">
             <div className="text-2xl font-black text-neutral-900 flex items-baseline gap-1.5">
-              <span>15.2</span>
+              <span>{fleetAvgFuelBurnLph}</span>
               <span className="text-xs font-normal text-neutral-400">Liters / Hr</span>
             </div>
-            <p className="text-[11px] text-emerald-600 font-medium mt-1 flex items-center gap-1">
-              <span>Within Cat OEM tolerance for tier 4 engines</span>
+            <p className={`text-[11px] font-medium mt-1 flex items-center gap-1 ${overFuelCeilingCount > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+              <span>
+                {overFuelCeilingCount > 0
+                  ? `${overFuelCeilingCount} unit${overFuelCeilingCount > 1 ? 's' : ''} over Cat OEM tier-4 burn ceiling`
+                  : 'Within Cat OEM tolerance for tier 4 engines'}
+              </span>
             </p>
           </div>
         </div>

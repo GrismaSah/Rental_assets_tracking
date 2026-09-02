@@ -79,7 +79,7 @@ export const CheckInOutModal: React.FC<CheckInOutModalProps> = ({
       setSelectedSiteId(preSelectedAsset.site_id);
       setSelectedOperatorId(preSelectedAsset.operator_id || '');
       setFuelPct(preSelectedAsset.fuel_level_pct);
-      setEngineHours(preSelectedAsset.engine_hours_day * preSelectedAsset.operating_days);
+      setEngineHours(preSelectedAsset.lifetime_engine_hours);
     } else if (assets.length > 0 && !selectedAssetId) {
       setSelectedAssetId(assets[0].id);
       setSelectedSiteId(sites[0]?.id || 'S001');
@@ -385,11 +385,12 @@ export const CheckInOutModal: React.FC<CheckInOutModalProps> = ({
                 <div>
                   <label className="block text-xs font-bold text-neutral-700 mb-1 flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-neutral-400" />
-                    Logged Shift Work Hours (Engine)
+                    Engine Meter Reading (Cumulative Hours)
                   </label>
                   <input
                     type="number"
                     step="0.5"
+                    min={currentAsset?.lifetime_engine_hours ?? 0}
                     value={engineHours}
                     onChange={(e) => setEngineHours(Number(e.target.value))}
                     className="w-full px-3 py-2 rounded-xl text-xs bg-neutral-50 border border-neutral-200 focus:bg-white focus:ring-2 focus:ring-[#FFCD00]/50"

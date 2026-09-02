@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { TelemetryAnalytics } from './components/TelemetryAnalytics';
 import { CheckInOutModal } from './components/CheckInOutModal';
@@ -10,8 +10,6 @@ import { QrCodeModal } from './components/QrCodeModal';
 import { ExecutiveDashboard } from './components/ExecutiveDashboard';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './data/initialAssets';
 import { Asset, Site, Operator, AnomalyAlert, AlertHistoryEntry, InspectionCheckItem } from './types';
-import { runAnomalyDetection } from './utils/anomalyDetector';
-import { dispatchNotification } from './utils/notificationDispatcher';
 import { CheckCircle2, AlertCircle } from 'lucide-react';
 
 export default function App() {
@@ -53,75 +51,32 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Re-run the rules engine, auto-dispatching Email + SMS + in-cab console
-  // notifications the instant a *new* alert appears (mirrors how a real
-  // telematics platform like VisionLink pushes alerts automatically rather
-  // than waiting for someone to click a button). Alerts that already existed
-  // keep their prior resolved/notification state instead of being recomputed
-  // from scratch, so acknowledging or notifying an alert isn't undone the
-  // next time assets change. Every alert, past and present, is also logged
-  // into the permanent audit trail (alertHistory).
-  const refreshAlerts = () => {
-    const detectedAlerts = runAnomalyDetection(assets);
-    const prevById = new Map<string, AnomalyAlert>(alerts.map((a) => [a.id, a]));
-    const now = new Date().toISOString();
-    let newlyNotifiedCount = 0;
-
-    const merged = detectedAlerts.map((alert) => {
-      const prev = prevById.get(alert.id);
-      if (prev) {
-        return { ...alert, resolved: prev.resolved, notifications: prev.notifications, notified_at: prev.notified_at };
+  // The server owns the latest fleet snapshot and persisted alert state.
+  // Polling keeps the dashboard current today; this endpoint can be swapped
+  // for Server-Sent Events when a production telemetry provider is connected.
+  const syncDashboard = useCallback(async () => {
+    try {
+      const [dashboardResponse, historyResponse] = await Promise.all([
+        fetch('/api/dashboard'),
+        fetch('/api/alerts?history=true'),
+      ]);
+      if (!dashboardResponse.ok || !historyResponse.ok) throw new Error('Fleet API is unavailable');
+      const [dashboard, history] = await Promise.all([dashboardResponse.json(), historyResponse.json()]);
+      if (dashboard.success && dashboard.assets) {
+        setAssets(dashboard.assets);
+        setAlerts(dashboard.alerts || []);
       }
-
-      const asset = assets.find((a) => a.id === alert.asset_id);
-      const site = sites.find((s) => s.id === asset?.site_id);
-      const operator = operators.find((o) => o.id === asset?.operator_id);
-      const dispatches = dispatchNotification(alert, asset, site, operator);
-      newlyNotifiedCount += 1;
-
-      return { ...alert, notifications: dispatches, notified_at: now };
-    });
-
-    setAlerts(merged);
-
-    if (newlyNotifiedCount > 0) {
-      showToast(
-        'Auto-Notification Dispatched',
-        `${newlyNotifiedCount} new alert(s) auto-notified via Email, SMS & in-cab console alert.`
-      );
+      if (history.success) setAlertHistory(history.alerts || []);
+    } catch (err) {
+      console.warn('Fleet API sync failed; retaining the last visible fleet snapshot.', err);
     }
-
-    const detectedIds = new Set(merged.map((a) => a.id));
-    const historyById = new Map<string, AlertHistoryEntry>(alertHistory.map((h) => [h.id, h]));
-
-    const clearedHistory = alertHistory.map((h) =>
-      !detectedIds.has(h.id) && !h.cleared_at ? { ...h, cleared_at: now } : h
-    );
-    const newHistoryEntries: AlertHistoryEntry[] = merged
-      .filter((a) => !historyById.has(a.id))
-      .map((a) => ({ ...a, first_seen_at: now }));
-
-    setAlertHistory([...newHistoryEntries, ...clearedHistory]);
-  };
-
-  // Run anomaly detection whenever assets change
-  useEffect(() => {
-    refreshAlerts();
-  }, [assets]);
-
-  // Load initial backend assets if running fullstack
-  useEffect(() => {
-    fetch('/api/assets')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.assets) {
-          setAssets(data.assets);
-        }
-      })
-      .catch((err) => {
-        console.log('Using embedded local dataset:', err);
-      });
   }, []);
+
+  useEffect(() => {
+    syncDashboard();
+    const timer = window.setInterval(syncDashboard, 5000);
+    return () => window.clearInterval(timer);
+  }, [syncDashboard]);
 
   // Handler: Handle Check-Out from Form
   const handleCheckOutSubmit = async (data: {
@@ -162,7 +117,10 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...data, source: checkInOutSource }),
-    }).catch((e) => console.log(e));
+    }).then(async (response) => {
+      if (!response.ok) throw new Error((await response.json()).error || 'Check-out failed');
+      await syncDashboard();
+    }).catch((e) => showToast('Check-Out Failed', e.message, 'warning'));
     setCheckInOutSource('manual');
 
     showToast(
@@ -202,7 +160,10 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...data, source: checkInOutSource }),
-    }).catch((e) => console.log(e));
+    }).then(async (response) => {
+      if (!response.ok) throw new Error((await response.json()).error || 'Check-in failed');
+      await syncDashboard();
+    }).catch((e) => showToast('Check-In Failed', e.message, 'warning'));
     setCheckInOutSource('manual');
 
     showToast(
@@ -249,7 +210,10 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record),
-    }).catch((e) => console.log(e));
+    }).then(async (response) => {
+      if (!response.ok) throw new Error((await response.json()).error || 'Inspection submission failed');
+      await syncDashboard();
+    }).catch((e) => showToast('Inspection Failed', e.message, 'warning'));
   };
 
   // Helper: Open CheckIn/Out modal with preselected asset
@@ -275,7 +239,13 @@ export default function App() {
     setModalAsset(asset);
     setCheckInOutMode(asset.status === 'Active' ? 'checkin' : 'checkout');
     setIsCheckInOutOpen(true);
-    showToast('QR Tag Recognized', `${asset.id} (${asset.model}) matched — form pre-filled.`);
+    fetch(`/api/assets/${asset.id}/scan`, { method: 'POST' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error((await response.json()).error || 'QR scan could not be recorded');
+        await syncDashboard();
+        showToast('QR Scan Recorded', `${asset.id} matched. Live telemetry tracking has started and the handover form is pre-filled.`);
+      })
+      .catch((error) => showToast('QR Scan Failed', error.message, 'warning'));
   };
 
   // Helper: Open the QR tag modal for a specific asset
@@ -307,35 +277,24 @@ export default function App() {
 
   // Helper: Resolve anomaly alert
   const handleResolveAlert = (alertId: string) => {
-    setAlerts((prev) =>
-      prev.map((a) => (a.id === alertId ? { ...a, resolved: true } : a))
-    );
-    setAlertHistory((prev) =>
-      prev.map((h) => (h.id === alertId ? { ...h, resolved: true } : h))
-    );
-    showToast('Alert Acknowledged', `Anomaly flag ${alertId} marked as reviewed.`);
+    fetch(`/api/alerts/${alertId}/acknowledge`, { method: 'POST' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error((await response.json()).error || 'Acknowledgement failed');
+        await syncDashboard();
+        showToast('Alert Acknowledged', `Anomaly flag ${alertId} marked as reviewed.`);
+      })
+      .catch((error) => showToast('Alert Update Failed', error.message, 'warning'));
   };
 
   // Handler: Dispatch multi-channel notification for an alert (Email + SMS + in-cab console)
   const handleNotifyAlert = (alert: AnomalyAlert) => {
-    const asset = assets.find((a) => a.id === alert.asset_id);
-    const site = sites.find((s) => s.id === asset?.site_id);
-    const operator = operators.find((o) => o.id === asset?.operator_id);
-
-    const dispatches = dispatchNotification(alert, asset, site, operator);
-    const notifiedAt = new Date().toISOString();
-
-    setAlerts((prev) =>
-      prev.map((a) => (a.id === alert.id ? { ...a, notifications: dispatches, notified_at: notifiedAt } : a))
-    );
-    setAlertHistory((prev) =>
-      prev.map((h) => (h.id === alert.id ? { ...h, notifications: dispatches, notified_at: notifiedAt } : h))
-    );
-
-    showToast(
-      'Notification Dispatched',
-      `${alert.asset_id}: alerted via ${dispatches.map((d) => d.channel).join(', ')}.`
-    );
+    fetch(`/api/alerts/${alert.id}/notify`, { method: 'POST' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error((await response.json()).error || 'Notification failed');
+        await syncDashboard();
+        showToast('Notification Recorded', `${alert.asset_id}: email, SMS and in-cab demo notifications were recorded.`);
+      })
+      .catch((error) => showToast('Notification Failed', error.message, 'warning'));
   };
 
   // Handler: Quick action from anomaly panel
@@ -367,7 +326,7 @@ export default function App() {
           setIsInspectionOpen(true);
         }}
         onRefresh={() => {
-          refreshAlerts();
+          void syncDashboard();
           showToast('Telemetry Synced', 'Refreshed live Caterpillar telematic sensor streams.');
         }}
       />

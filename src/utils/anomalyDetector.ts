@@ -1,9 +1,10 @@
-import { Asset, AnomalyAlert } from '../types';
+import { Asset, AnomalyAlert, Operator } from '../types';
 import { BUSINESS_RULES, getRuleEvaluationTime } from '../config/businessRules';
 
-export function runAnomalyDetection(assets: Asset[], evaluationTime?: Date | string): AnomalyAlert[] {
+export function runAnomalyDetection(assets: Asset[], evaluationTime?: Date | string, operators: Operator[] = []): AnomalyAlert[] {
   const alerts: AnomalyAlert[] = [];
   const now = getRuleEvaluationTime(evaluationTime);
+  const operatorsById = new Map(operators.map((o) => [o.id, o]));
 
   assets.forEach((asset) => {
     // Rule 1: High Idle Hours (> 8 hours/day)
@@ -106,6 +107,43 @@ export function runAnomalyDetection(assets: Asset[], evaluationTime?: Date | str
         description: `Cat Product Link™ diagnostic telemetry indicates maintenance required. Health index is ${asset.health_score}%.`,
         metric_value: `Health: ${asset.health_score}% | ${asset.next_maintenance_hours}h to service`,
         recommendation: `Dispatch Cat certified field technician for hydraulic and oil sample analysis.`,
+        timestamp: 'Telemetry Anomaly Trigger',
+        resolved: false,
+      });
+    }
+
+    // Rule 6: Operator Not Certified — assigned operator lacks the
+    // certification for this equipment type. Checkout blocks this going
+    // forward, but existing/legacy assignments should still surface it.
+    const assignedOperator = asset.operator_id ? operatorsById.get(asset.operator_id) : undefined;
+    if (assignedOperator && !assignedOperator.certified_equipment.includes(asset.type)) {
+      alerts.push({
+        id: `ANOM-CERT-${asset.id}`,
+        asset_id: asset.id,
+        type: 'Operator Not Certified',
+        severity: 'Critical',
+        description: `${assignedOperator.name} is operating ${asset.id} (${asset.type}) at ${asset.site_name} without certification for this equipment type.`,
+        metric_value: `Certified for: ${assignedOperator.certified_equipment.join(', ') || 'none'}`,
+        recommendation: `Reassign a certified operator immediately or pull the unit from active work until one is available.`,
+        timestamp: 'Real-Time Rule Trigger',
+        resolved: false,
+      });
+    }
+
+    // Rule 7: Excess Fuel Burn — actual burn rate exceeds the OEM duty-cycle
+    // ceiling for this equipment type, suggesting worn injectors, an
+    // undersized machine for the job, or another mechanical inefficiency.
+    const fuelCeiling = BUSINESS_RULES.fuelBurnCeilingLph[asset.type];
+    if (fuelCeiling && asset.fuel_burn_rate_lph > fuelCeiling) {
+      const overBy = Math.round(((asset.fuel_burn_rate_lph - fuelCeiling) / fuelCeiling) * 100);
+      alerts.push({
+        id: `ANOM-FUEL-${asset.id}`,
+        asset_id: asset.id,
+        type: 'Excess Fuel Burn',
+        severity: overBy >= 25 ? 'Critical' : 'Warning',
+        description: `${asset.id} is burning ${asset.fuel_burn_rate_lph} L/hr, ${overBy}% above the ${fuelCeiling} L/hr Cat OEM ceiling for a ${asset.type}.`,
+        metric_value: `${asset.fuel_burn_rate_lph} L/hr (ceiling ${fuelCeiling})`,
+        recommendation: `Schedule a fuel system / injector inspection — sustained excess burn usually signals wear or an oversized job for this unit.`,
         timestamp: 'Telemetry Anomaly Trigger',
         resolved: false,
       });

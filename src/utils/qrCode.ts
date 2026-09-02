@@ -10,7 +10,10 @@ import QRCode from 'qrcode';
 // no in-app camera feature needed. App.tsx watches for that ?scan= param on
 // load and opens the pre-filled check-in/out form for that machine.
 export function generateAssetQrCode(assetId: string): Promise<string> {
-  const url = new URL(window.location.origin);
+  // VITE_APP_URL is needed when the dashboard itself is opened on localhost
+  // but a physical phone scans the tag. Set it to the computer's LAN URL so
+  // the phone reaches this server instead of its own localhost.
+  const url = new URL(import.meta.env.VITE_APP_URL || window.location.origin);
   url.searchParams.set('scan', assetId);
 
   return QRCode.toDataURL(url.toString(), {

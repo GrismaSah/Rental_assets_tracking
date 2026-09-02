@@ -1,9 +1,25 @@
 import { Asset, Site, Operator, InspectionCheckItem } from '../types';
+import { BUSINESS_RULES } from '../config/businessRules';
+
+// The brief's sample dataset was authored as of BUSINESS_RULES.briefReferenceDate.
+// Re-anchor every date below to "today" while preserving each asset's offset
+// from that reference point, so overdue/approaching-return alerts reproduce
+// the brief's intended story (some overdue, some due soon, some healthy)
+// on whatever real day the app happens to run -- instead of going stale the
+// day after the brief was written.
+const BRIEF_REFERENCE_DATE = new Date(BUSINESS_RULES.briefReferenceDate);
+
+function relativeToToday(dateStr: string): string {
+  const original = new Date(`${dateStr}T00:00:00.000Z`);
+  const offsetMs = original.getTime() - BRIEF_REFERENCE_DATE.getTime();
+  return new Date(Date.now() + offsetMs).toISOString().slice(0, 10);
+}
 
 // The fields in this array are transcribed from the supplied Smart Rental
 // Tracking System brief. Additional fields (model, location, health, etc.)
-// are application metadata used to render the working dashboard.
-export const INITIAL_ASSETS: Asset[] = [
+// are application metadata used to render the working dashboard. Dates are
+// re-anchored to today via relativeToToday() below the array.
+const RAW_INITIAL_ASSETS: Asset[] = [
   {
     id: "EQX1001",
     type: "Excavator",
@@ -26,6 +42,7 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 950,
     last_maintenance_date: "2025-03-25",
     next_maintenance_hours: 48,
+    lifetime_engine_hours: 1.5 * 15,
     anomalies: ["High idle time (10.0 hrs/day) indicates severe operational bottlenecks"]
   },
   {
@@ -50,6 +67,7 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 1450,
     last_maintenance_date: "2025-03-01",
     next_maintenance_hours: 120,
+    lifetime_engine_hours: 0 * 20,
     anomalies: ["No job site assignment — unit is unassigned in the yard", "Unassigned operator while accruing rental billing", "Excessive idle standby"]
   },
   {
@@ -74,6 +92,7 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 1100,
     last_maintenance_date: "2025-02-10",
     next_maintenance_hours: 85,
+    lifetime_engine_hours: 7.5 * 25,
     anomalies: []
   },
   {
@@ -98,6 +117,7 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 1350,
     last_maintenance_date: "2025-04-20",
     next_maintenance_hours: 0,
+    lifetime_engine_hours: 2 * 10,
     anomalies: ["Hydraulic pressure deviation detected", "Overdue primary fluid service"]
   },
   {
@@ -122,6 +142,7 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 1600,
     last_maintenance_date: "2025-01-20",
     next_maintenance_hours: 150,
+    lifetime_engine_hours: 8 * 30,
     anomalies: []
   },
   {
@@ -146,6 +167,7 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 880,
     last_maintenance_date: "2025-03-30",
     next_maintenance_hours: 62,
+    lifetime_engine_hours: 3 * 18,
     anomalies: ["High idle-to-work ratio (66% idle)"]
   },
   {
@@ -172,9 +194,17 @@ export const INITIAL_ASSETS: Asset[] = [
     rental_rate_daily: 1200,
     last_maintenance_date: "2025-03-15",
     next_maintenance_hours: 90,
+    lifetime_engine_hours: 0 * 12,
     anomalies: ["No job site assignment — unit is unassigned", "No operator assigned", "Zero engine engagement for 12 days", "Expired rental lease"]
   }
 ];
+
+export const INITIAL_ASSETS: Asset[] = RAW_INITIAL_ASSETS.map((asset) => ({
+  ...asset,
+  checkout_date: relativeToToday(asset.checkout_date),
+  checkin_date: relativeToToday(asset.checkin_date),
+  last_maintenance_date: relativeToToday(asset.last_maintenance_date),
+}));
 
 export const SITES: Site[] = [
   { id: "S001", name: "SoCal Logistics Center / Nevada Solar Array", location: [34.0522, -118.2437], city: "Los Angeles / Las Vegas", state: "CA/NV", project_type: "Commercial Logistics & Energy", active_machinery_count: 2, supervisor: "Frank Castillo", supervisor_email: "frank.castillo@fleetops.example.com", supervisor_phone: "+1 (213) 555-0161" },

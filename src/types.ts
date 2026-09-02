@@ -25,6 +25,9 @@ export interface Asset {
   last_maintenance_date: string;
   next_maintenance_hours: number;
   anomalies: string[];
+  /** Cumulative engine meter reading, carried across rentals. Updated from
+   *  the operator-entered odometer value at each check-in. */
+  lifetime_engine_hours: number;
 }
 
 export interface Site {
@@ -76,7 +79,7 @@ export interface InspectionRecord {
 export interface AnomalyAlert {
   id: string;
   asset_id: string;
-  type: 'High Idle' | 'Unassigned Operator' | 'Unassigned Equipment' | 'Approaching Return' | 'Overdue Rental' | 'Low Health / Maintenance' | 'Excess Fuel Burn';
+  type: 'High Idle' | 'Unassigned Operator' | 'Unassigned Equipment' | 'Approaching Return' | 'Overdue Rental' | 'Low Health / Maintenance' | 'Excess Fuel Burn' | 'Operator Not Certified';
   severity: 'Critical' | 'Warning' | 'Info';
   description: string;
   metric_value: string;

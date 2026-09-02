@@ -117,6 +117,8 @@ export const AnomalyAlertsPanel: React.FC<AnomalyAlertsPanelProps> = ({
           if (alert.type === 'Unassigned Equipment') TypeIcon = MapPinOff;
           if (alert.type === 'Overdue Rental' || alert.type === 'Approaching Return') TypeIcon = CalendarX;
           if (alert.type === 'Low Health / Maintenance') TypeIcon = Wrench;
+          if (alert.type === 'Excess Fuel Burn') TypeIcon = Fuel;
+          if (alert.type === 'Operator Not Certified') TypeIcon = ShieldAlert;
 
           return (
             <div

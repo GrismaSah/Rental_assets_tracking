@@ -32,7 +32,7 @@ interface FleetMapViewProps {
 
 interface RentalEvent {
   id: number;
-  event_type: 'checkout' | 'checkin';
+  event_type: 'checkout' | 'checkin' | 'scan';
   site_name: string | null;
   operator_name: string | null;
   timestamp: string;
@@ -498,8 +498,8 @@ export const FleetMapView: React.FC<FleetMapViewProps> = ({
                     {rentalHistory.map((ev) => (
                       <div key={ev.id} className="flex items-center justify-between text-[11px]">
                         <span className="text-neutral-700">
-                          <span className={`font-bold ${ev.event_type === 'checkout' ? 'text-amber-600' : 'text-emerald-600'}`}>
-                            {ev.event_type === 'checkout' ? 'Checked Out' : 'Checked In'}
+                          <span className={`font-bold ${ev.event_type === 'checkout' ? 'text-amber-600' : ev.event_type === 'scan' ? 'text-blue-600' : 'text-emerald-600'}`}>
+                            {ev.event_type === 'checkout' ? 'Checked Out' : ev.event_type === 'scan' ? 'QR Scan / Tracking Started' : 'Checked In'}
                           </span>
                           {ev.site_name ? ` — ${ev.site_name}` : ''}
                         </span>

@@ -6,6 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { DatabaseSync } from 'node:sqlite';
 import { INITIAL_ASSETS, SITES, OPERATORS } from './src/data/initialAssets.ts';
+import { runAnomalyDetection } from './src/utils/anomalyDetector.ts';
 
 dotenv.config();
 
@@ -13,7 +14,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
@@ -24,7 +25,10 @@ app.use(express.json());
 // check-in/check-out/inspection was lost on a server restart. SQLite gives
 // real persistence with zero extra dependencies (no native build step,
 // unlike better-sqlite3) since it ships inside the Node runtime itself.
-const db = new DatabaseSync(path.join(__dirname, 'fleet.db'));
+// Keep runtime state outside dist/ so rebuilding the frontend never deletes or
+// locks the database. This also gives development and production one durable
+// database location when launched from the project directory.
+const db = new DatabaseSync(path.join(process.cwd(), 'fleet.db'));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS assets (
@@ -48,9 +52,37 @@ db.exec(`
     idle_hours_day REAL,
     fuel_level_pct REAL,
     timestamp TEXT NOT NULL,
-    source TEXT NOT NULL
+    source TEXT NOT NULL,
+    details TEXT
+  );
+  CREATE TABLE IF NOT EXISTS telemetry_readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    engine_hours_day REAL NOT NULL,
+    idle_hours_day REAL NOT NULL,
+    fuel_level_pct REAL NOT NULL,
+    status TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS alerts (
+    id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL,
+    data TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    cleared_at TEXT
   );
 `);
+
+// Lightweight forward migration for databases created before rental-event
+// handover details were captured. Keeping it here makes an existing demo DB
+// upgrade safely on restart rather than requiring anyone to delete data.
+const rentalEventColumns = db.prepare('PRAGMA table_info(rental_events)').all() as { name: string }[];
+if (!rentalEventColumns.some((column) => column.name === 'details')) {
+  db.exec('ALTER TABLE rental_events ADD COLUMN details TEXT');
+}
 
 const upsertAssetStmt = db.prepare(
   'INSERT INTO assets (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data'
@@ -60,8 +92,12 @@ const insertInspectionStmt = db.prepare(
 );
 const insertRentalEventStmt = db.prepare(`
   INSERT INTO rental_events
-    (asset_id, event_type, site_id, site_name, operator_id, operator_name, engine_hours_day, idle_hours_day, fuel_level_pct, timestamp, source)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (asset_id, event_type, site_id, site_name, operator_id, operator_name, engine_hours_day, idle_hours_day, fuel_level_pct, timestamp, source, details)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const insertTelemetryStmt = db.prepare(`
+  INSERT INTO telemetry_readings (asset_id, timestamp, latitude, longitude, engine_hours_day, idle_hours_day, fuel_level_pct, status)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 function persistAsset(asset: any) {
@@ -77,7 +113,7 @@ function persistInspection(inspection: any) {
 // train on (equipment type, site, duration, how often it's re-rented). The
 // `assets` table only ever holds *current* state; this is what accumulates
 // over time as machines get checked out and back in, QR scan or manual.
-function recordRentalEvent(asset: any, eventType: 'checkout' | 'checkin', source: 'qr' | 'manual') {
+function recordRentalEvent(asset: any, eventType: 'checkout' | 'checkin' | 'scan', source: 'qr' | 'manual', details: Record<string, unknown> = {}) {
   insertRentalEventStmt.run(
     asset.id,
     eventType,
@@ -89,7 +125,8 @@ function recordRentalEvent(asset: any, eventType: 'checkout' | 'checkin', source
     asset.idle_hours_day ?? null,
     asset.fuel_level_pct ?? null,
     new Date().toISOString(),
-    source
+    source,
+    JSON.stringify(details)
   );
 }
 
@@ -98,6 +135,116 @@ function getRentalHistory(assetId?: string) {
     ? db.prepare('SELECT * FROM rental_events WHERE asset_id = ? ORDER BY timestamp DESC').all(assetId)
     : db.prepare('SELECT * FROM rental_events ORDER BY timestamp DESC').all();
   return rows;
+}
+
+const liveTrackedAssetIds = new Set<string>();
+
+// This is a deliberate demo telemetry source. A real deployment replaces this
+// loop with authenticated Product Link/VisionLink webhooks, but QR scanning
+// immediately creates the same persisted tracking session and live UI effect.
+function publishDemoTelemetry(assetId: string) {
+  const index = fleetAssets.findIndex((asset) => asset.id === assetId);
+  if (index === -1) return;
+  const current = fleetAssets[index];
+  const working = current.status === 'Active';
+  const asset = {
+    ...current,
+    location: [current.location[0] + (Math.random() - 0.5) * 0.002, current.location[1] + (Math.random() - 0.5) * 0.002] as [number, number],
+    engine_hours_day: Number((current.engine_hours_day + (working ? 0.1 : 0)).toFixed(1)),
+    idle_hours_day: Number((current.idle_hours_day + (working ? 0 : 0.1)).toFixed(1)),
+    fuel_level_pct: Number(Math.max(0, current.fuel_level_pct - (working ? 0.2 : 0.03)).toFixed(1)),
+    tracking_enabled: true,
+    tracking_status: 'Live demo telemetry',
+    last_telemetry_at: new Date().toISOString(),
+  };
+  fleetAssets[index] = asset;
+  persistAsset(asset);
+  insertTelemetryStmt.run(asset.id, asset.last_telemetry_at, asset.location[0], asset.location[1], asset.engine_hours_day, asset.idle_hours_day, asset.fuel_level_pct, asset.status);
+  refreshServerAlerts();
+}
+
+// Every asset actively on rent gets live telemetry ticking automatically --
+// the brief assumes fleet-wide "real time" data, not just units someone
+// happened to QR-scan. A scan additionally live-tracks non-Active units
+// (Idle/Under Maintenance) so the demo can show tracking start on scan too.
+setInterval(() => {
+  const activeIds = fleetAssets.filter((a) => a.status === 'Active').map((a) => a.id);
+  new Set([...activeIds, ...liveTrackedAssetIds]).forEach(publishDemoTelemetry);
+}, 5000).unref();
+
+async function sendSms(to: string, body: string) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+  if (!accountSid || !authToken || !from) {
+    return { status: 'Simulated', detail: 'Add Twilio credentials and a verified destination number to send this SMS for real.' };
+  }
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ To: to, From: from, Body: body }),
+  });
+  const payload: any = await response.json();
+  if (!response.ok) throw new Error(payload.message || 'SMS provider rejected the message');
+  return { status: 'Sent', detail: `Twilio message ${payload.sid} accepted for delivery.` };
+}
+
+async function sendAutomaticAlertNotification(alertId: string) {
+  const row = db.prepare('SELECT data FROM alerts WHERE id = ?').get(alertId) as { data: string } | undefined;
+  if (!row) return;
+  const alert = JSON.parse(row.data);
+  const asset = fleetAssets.find((item) => item.id === alert.asset_id);
+  const site = SITES.find((item) => item.id === asset?.site_id);
+  const operator = OPERATORS.find((item) => item.id === asset?.operator_id);
+  const recipients = [process.env.ALERT_MANAGER_PHONE || site?.supervisor_phone, process.env.ALERT_CUSTOMER_PHONE || operator?.contact]
+    .filter((phone): phone is string => Boolean(phone));
+  const message = `Fleet alert ${alert.asset_id}: ${alert.type}. ${alert.recommendation}`;
+  const notifications = await Promise.all(recipients.map(async (recipient) => {
+    try { return { channel: 'SMS', recipient, ...(await sendSms(recipient, message)) }; }
+    catch (error: any) { return { channel: 'SMS', recipient, status: 'Failed', detail: error.message || 'SMS delivery failed.' }; }
+  }));
+  const latest = db.prepare('SELECT data FROM alerts WHERE id = ?').get(alertId) as { data: string } | undefined;
+  if (!latest) return;
+  db.prepare('UPDATE alerts SET data = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(latest.data), notifications, notified_at: new Date().toISOString() }), alertId);
+}
+
+function refreshServerAlerts() {
+  const now = new Date().toISOString();
+  const detected = runAnomalyDetection(fleetAssets, undefined, OPERATORS);
+  const activeIds = new Set(detected.map((alert) => alert.id));
+  const existing = db.prepare('SELECT id, data, first_seen_at FROM alerts').all() as { id: string; data: string; first_seen_at: string }[];
+  const existingById = new Map(existing.map((row) => [row.id, row]));
+
+  for (const alert of detected) {
+    const previous = existingById.get(alert.id);
+    const previousData = previous ? JSON.parse(previous.data) : {};
+    const data = JSON.stringify({
+      ...alert,
+      resolved: previousData.resolved ?? false,
+      notifications: previousData.notifications,
+      notified_at: previousData.notified_at,
+      acknowledged_at: previousData.acknowledged_at,
+      first_seen_at: previous?.first_seen_at || now,
+      cleared_at: null,
+    });
+    db.prepare(`INSERT INTO alerts (id, asset_id, data, first_seen_at, last_seen_at, cleared_at)
+      VALUES (?, ?, ?, ?, ?, NULL)
+      ON CONFLICT(id) DO UPDATE SET data = excluded.data, last_seen_at = excluded.last_seen_at, cleared_at = NULL`)
+      .run(alert.id, alert.asset_id, data, previous?.first_seen_at || now, now);
+    if (!previous) void sendAutomaticAlertNotification(alert.id);
+  }
+  for (const row of existing) {
+    if (!activeIds.has(row.id)) db.prepare('UPDATE alerts SET cleared_at = ? WHERE id = ? AND cleared_at IS NULL').run(now, row.id);
+  }
+  return detected;
+}
+
+function getAlerts(includeCleared = false) {
+  const rows = db.prepare(`SELECT data, cleared_at FROM alerts ${includeCleared ? '' : 'WHERE cleared_at IS NULL'} ORDER BY last_seen_at DESC`).all() as { data: string; cleared_at: string | null }[];
+  return rows.map((row) => ({ ...JSON.parse(row.data), cleared_at: row.cleared_at }));
 }
 
 function loadOrSeedAssets(): any[] {
@@ -120,6 +267,7 @@ function loadInspections(): any[] {
 // Fleet state, now backed by SQLite -- survives a server restart.
 let fleetAssets = loadOrSeedAssets();
 let inspectionLogs: any[] = loadInspections();
+refreshServerAlerts();
 
 // Gemini client initialization
 function getGeminiClient(): GoogleGenAI | null {
@@ -152,6 +300,93 @@ app.get('/api/assets', (req, res) => {
   });
 });
 
+// Current server-side alerts. These persist independently of any open browser.
+app.get('/api/alerts', (req, res) => {
+  res.json({ success: true, alerts: getAlerts(req.query.history === 'true') });
+});
+
+// Acknowledgement and notification records belong on the server, not only in
+// one browser tab, so the demo stays consistent after refresh or on another
+// device. Delivery is deliberately marked "simulated" until a real provider
+// (Twilio/SendGrid/Cat integration) is configured.
+app.post('/api/alerts/:id/acknowledge', (req, res) => {
+  const row = db.prepare('SELECT data FROM alerts WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+  if (!row) return res.status(404).json({ error: 'Alert not found' });
+  const data = { ...JSON.parse(row.data), resolved: true, acknowledged_at: new Date().toISOString() };
+  db.prepare('UPDATE alerts SET data = ? WHERE id = ?').run(JSON.stringify(data), req.params.id);
+  res.json({ success: true, alert: data });
+});
+
+app.post('/api/alerts/:id/notify', async (req, res) => {
+  const row = db.prepare('SELECT data FROM alerts WHERE id = ?').get(req.params.id) as { data: string } | undefined;
+  if (!row) return res.status(404).json({ error: 'Alert not found' });
+  const alert = JSON.parse(row.data);
+  const asset = fleetAssets.find((item) => item.id === alert.asset_id);
+  const site = SITES.find((item) => item.id === asset?.site_id);
+  const operator = OPERATORS.find((item) => item.id === asset?.operator_id);
+  const message = `Fleet alert ${alert.asset_id}: ${alert.type}. ${alert.recommendation}`;
+  const managerPhone = process.env.ALERT_MANAGER_PHONE || site?.supervisor_phone;
+  const customerPhone = process.env.ALERT_CUSTOMER_PHONE || operator?.contact;
+  const smsRecipients = [
+    { label: 'Manager SMS', recipient: managerPhone },
+    { label: 'Customer / Operator SMS', recipient: customerPhone },
+  ].filter((entry): entry is { label: string; recipient: string } => Boolean(entry.recipient));
+  const smsNotifications = await Promise.all(smsRecipients.map(async ({ label, recipient }) => {
+    try {
+      const result = await sendSms(recipient, message);
+      return { channel: 'SMS', recipient: `${label}: ${recipient}`, ...result };
+    } catch (error: any) {
+      return { channel: 'SMS', recipient: `${label}: ${recipient}`, status: 'Failed', detail: error.message || 'SMS delivery failed.' };
+    }
+  }));
+  const notifications = [
+    ...(site ? [{ channel: 'Email', recipient: `${site.supervisor} <${site.supervisor_email}>`, status: 'Simulated', detail: 'Demo email notification recorded.' }] : []),
+    ...smsNotifications,
+    { channel: 'In-Cab Console Alert', recipient: asset ? `${asset.id} on-board display` : 'Unit display', status: 'Simulated', detail: 'Demo in-cab alert recorded.' },
+  ];
+  const data = { ...alert, notifications, notified_at: new Date().toISOString() };
+  db.prepare('UPDATE alerts SET data = ? WHERE id = ?').run(JSON.stringify(data), req.params.id);
+  res.json({ success: true, alert: data });
+});
+
+// Phone QR scans register the machine, persist the scan event, and activate a
+// live telemetry session. The current source is intentionally simulated; the
+// endpoint is the stable seam for a real hardware/webhook integration.
+app.post('/api/assets/:id/scan', (req, res) => {
+  const index = fleetAssets.findIndex((asset) => asset.id.toLowerCase() === req.params.id.toLowerCase());
+  if (index === -1) return res.status(404).json({ error: 'Asset not found' });
+  const asset = { ...fleetAssets[index], tracking_enabled: true, tracking_status: 'Live demo telemetry', last_qr_scan_at: new Date().toISOString() };
+  fleetAssets[index] = asset;
+  liveTrackedAssetIds.add(asset.id);
+  persistAsset(asset);
+  recordRentalEvent(asset, 'scan', 'qr', { scan_source: 'phone QR', tracking_started_at: asset.last_qr_scan_at });
+  publishDemoTelemetry(asset.id);
+  res.json({ success: true, asset, message: `QR scan recorded and live tracking started for ${asset.id}` });
+});
+
+// Latest dashboard metrics calculated from the persisted fleet state.
+app.get('/api/dashboard', (req, res) => {
+  const totalEngineHours = fleetAssets.reduce((sum, asset) => sum + asset.engine_hours_day * asset.operating_days, 0);
+  const totalIdleHours = fleetAssets.reduce((sum, asset) => sum + asset.idle_hours_day * asset.operating_days, 0);
+  const fuelUsedLiters = fleetAssets.reduce((sum, asset) => sum + (asset.engine_hours_day + asset.idle_hours_day) * asset.operating_days * asset.fuel_burn_rate_lph, 0);
+  res.json({ success: true, assets: fleetAssets, alerts: getAlerts(), metrics: { total_assets: fleetAssets.length, active_assets: fleetAssets.filter((a) => a.status === 'Active').length, total_engine_hours: Math.round(totalEngineHours), total_idle_hours: Math.round(totalIdleHours), fuel_used_liters: Math.round(fuelUsedLiters) } });
+});
+
+// Telematics ingestion contract. A simulator or a real equipment provider can
+// post the same payload; every accepted reading updates the asset and alerts.
+app.post('/api/telemetry', (req, res) => {
+  const { asset_id, timestamp = new Date().toISOString(), latitude, longitude, engine_hours_day, idle_hours_day, fuel_level_pct, status } = req.body;
+  const index = fleetAssets.findIndex((asset) => asset.id.toLowerCase() === String(asset_id || '').toLowerCase());
+  if (index === -1) return res.status(404).json({ error: `Equipment ${asset_id} not found` });
+  if (![latitude, longitude, engine_hours_day, idle_hours_day, fuel_level_pct].every(Number.isFinite)) return res.status(400).json({ error: 'latitude, longitude, engine_hours_day, idle_hours_day and fuel_level_pct must be numbers' });
+  const asset = { ...fleetAssets[index], location: [latitude, longitude] as [number, number], engine_hours_day, idle_hours_day, fuel_level_pct, status: status || fleetAssets[index].status };
+  fleetAssets[index] = asset;
+  persistAsset(asset);
+  insertTelemetryStmt.run(asset.id, timestamp, latitude, longitude, engine_hours_day, idle_hours_day, fuel_level_pct, asset.status);
+  const alerts = refreshServerAlerts();
+  res.json({ success: true, asset, alerts });
+});
+
 // 2. Get asset by ID
 app.get('/api/assets/:id', (req, res) => {
   const asset = fleetAssets.find((a) => a.id.toLowerCase() === req.params.id.toLowerCase());
@@ -172,6 +407,16 @@ app.post('/api/checkout', (req, res) => {
 
   const site = SITES.find((s) => s.id === site_id);
   const operator = OPERATORS.find((o) => o.id === operator_id);
+  if (!site) return res.status(400).json({ error: 'A valid destination site is required' });
+  if (operator && !operator.certified_equipment.includes(fleetAssets[index].type)) {
+    return res.status(400).json({ error: `${operator.name} is not certified for ${fleetAssets[index].type}` });
+  }
+  if (checkout_date && checkin_date && new Date(checkin_date) < new Date(checkout_date)) {
+    return res.status(400).json({ error: 'Expected return must be after check-out date' });
+  }
+  if (starting_fuel !== undefined && (!Number.isFinite(starting_fuel) || starting_fuel < 0 || starting_fuel > 100)) {
+    return res.status(400).json({ error: 'Starting fuel must be between 0 and 100' });
+  }
   const defaultReturn = new Date();
   defaultReturn.setDate(defaultReturn.getDate() + 14);
 
@@ -189,7 +434,8 @@ app.post('/api/checkout', (req, res) => {
     anomalies: [],
   };
   persistAsset(fleetAssets[index]);
-  recordRentalEvent(fleetAssets[index], 'checkout', source === 'qr' ? 'qr' : 'manual');
+  recordRentalEvent(fleetAssets[index], 'checkout', source === 'qr' ? 'qr' : 'manual', { checkout_date: fleetAssets[index].checkout_date, expected_return_date: fleetAssets[index].checkin_date, starting_fuel: fleetAssets[index].fuel_level_pct });
+  refreshServerAlerts();
 
   res.json({
     success: true,
@@ -206,6 +452,13 @@ app.post('/api/checkin', (req, res) => {
   if (index === -1) {
     return res.status(404).json({ error: `Equipment ${asset_id} not found` });
   }
+  if (!Number.isFinite(ending_engine_hours) || ending_engine_hours < 0) return res.status(400).json({ error: 'Ending engine hours must be a non-negative number' });
+  if (ending_engine_hours < (fleetAssets[index].lifetime_engine_hours || 0)) {
+    return res.status(400).json({ error: `Ending engine hours (${ending_engine_hours}) can't be less than the current meter reading (${fleetAssets[index].lifetime_engine_hours})` });
+  }
+  if (!Number.isFinite(fuel_level_pct) || fuel_level_pct < 0 || fuel_level_pct > 100) return res.status(400).json({ error: 'Fuel level must be between 0 and 100' });
+  const returnSite = return_site_id ? SITES.find((site) => site.id === return_site_id) : undefined;
+  if (return_site_id && !returnSite) return res.status(400).json({ error: 'Return site is invalid' });
 
   fleetAssets[index] = {
     ...fleetAssets[index],
@@ -213,10 +466,13 @@ app.post('/api/checkin', (req, res) => {
     operator_id: null,
     operator_name: null,
     fuel_level_pct: fuel_level_pct !== undefined ? fuel_level_pct : fleetAssets[index].fuel_level_pct,
+    lifetime_engine_hours: ending_engine_hours,
+    returned_at: new Date().toISOString(),
     anomalies: [],
   };
   persistAsset(fleetAssets[index]);
-  recordRentalEvent(fleetAssets[index], 'checkin', source === 'qr' ? 'qr' : 'manual');
+  recordRentalEvent(fleetAssets[index], 'checkin', source === 'qr' ? 'qr' : 'manual', { return_site_id: returnSite?.id || null, return_site_name: returnSite?.name || null, ending_engine_hours, fuel_level_pct, inspection_notes: inspection_notes || null, return_status: fleetAssets[index].status });
+  refreshServerAlerts();
 
   res.json({
     success: true,
@@ -254,6 +510,7 @@ app.post('/api/inspections', (req, res) => {
       fleetAssets[assetIdx].status = 'Under Maintenance';
       fleetAssets[assetIdx].health_score = Math.max(30, 100 - req.body.risk_score);
       persistAsset(fleetAssets[assetIdx]);
+      refreshServerAlerts();
     }
   }
 
@@ -323,7 +580,7 @@ Only output valid JSON.`;
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           const aiResponse = await client.models.generateContent({
-            model: 'gemini-3.7-flash',
+            model: 'gemini-3.6-flash',
             contents: prompt,
             config: {
               responseMimeType: 'application/json',
@@ -430,7 +687,7 @@ Only output valid JSON.`;
 // -------------------------------------------------------------
 
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (!process.argv.includes('--production')) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
