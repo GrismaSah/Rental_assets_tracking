@@ -1,5 +1,7 @@
 import express from 'express';
 import path from 'path';
+import os from 'os';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -25,10 +27,18 @@ app.use(express.json());
 // check-in/check-out/inspection was lost on a server restart. SQLite gives
 // real persistence with zero extra dependencies (no native build step,
 // unlike better-sqlite3) since it ships inside the Node runtime itself.
-// Keep runtime state outside dist/ so rebuilding the frontend never deletes or
-// locks the database. This also gives development and production one durable
-// database location when launched from the project directory.
-const db = new DatabaseSync(path.join(process.cwd(), 'fleet.db'));
+//
+// The DB file lives outside the project folder entirely (not just outside
+// dist/), in the user's home directory. It used to sit at <project>/fleet.db,
+// but the live telemetry simulator rewrites it every 5s, and Vite's dev
+// server watches the whole project root for its own .env/config-restart
+// logic -- that write churn was tripping false-positive "*.env changed*"
+// detections on Windows, restarting the Vite server in a tight 5s loop and
+// killing the page's live connection continuously. Keeping runtime state
+// fully outside the watched tree removes the false trigger at the source.
+const dataDir = path.join(os.homedir(), '.rental-assets-tracking');
+fs.mkdirSync(dataDir, { recursive: true });
+const db = new DatabaseSync(path.join(dataDir, 'fleet.db'));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS assets (
